@@ -188,7 +188,9 @@ def parse_turbo_hours(raw_value: str) -> tuple[tuple[int, int], ...]:
             end = int(end_s)
         except ValueError:
             continue
-        if 0 <= start <= 23 and 0 <= end <= 23 and start != end:
+        if 0 <= start <= 23 and 0 <= end <= 23:
+            if start == end:
+                end = (start + 1) % 24
             ranges.append((start, end))
     return tuple(ranges) if ranges else ((18, 21),)
 
@@ -389,7 +391,8 @@ class AtomClient:
         return max(0, int(remaining))
 
     def _backoff_seconds(self, attempt: int) -> float:
-        exponential = self.cfg.retry_base_seconds * (2 ** (attempt - 1))
+        normalized_attempt = max(1, attempt)
+        exponential = self.cfg.retry_base_seconds * (2 ** (normalized_attempt - 1))
         jitter = random.uniform(JITTER_MIN_SECONDS, JITTER_MAX_SECONDS)
         return min(self.cfg.max_backoff_seconds, exponential + jitter)
 
@@ -409,8 +412,9 @@ class AtomClient:
 
         last_error: Optional[str] = None
         for attempt in range(1, self.cfg.max_retry_attempts + 1):
-            url_index = (self._round_robin_index + (attempt - 1)) % len(urls)
+            url_index = self._round_robin_index
             url = urls[url_index]
+            self._round_robin_index = (self._round_robin_index + 1) % len(urls)
             await self._humanized_delay()
             try:
                 async with self.session.request(
@@ -457,7 +461,6 @@ class AtomClient:
                         raise RuntimeError(
                             f"{context_label} failed status={response.status} body={body[:300]}"
                         )
-                    self._round_robin_index = (url_index + 1) % len(urls)
                     try:
                         return await response.json(content_type=None)
                     except Exception as exc:
@@ -866,8 +869,8 @@ async def watch_events(app: Application, chat_id: int) -> None:
                     opportunities = await client.fetch_partnership_domains()
                 except Exception as exc:
                     LOGGER.exception("Failed to fetch partnership domains: %s", exc)
-                    backoff_wait = max(poll_seconds, client.quota_backoff_remaining_seconds())
-                    await asyncio.sleep(backoff_wait)
+                    wait_seconds = max(poll_seconds, client.quota_backoff_remaining_seconds())
+                    await asyncio.sleep(wait_seconds)
                     continue
 
                 if not opportunities:
