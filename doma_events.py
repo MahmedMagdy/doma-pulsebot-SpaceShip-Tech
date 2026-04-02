@@ -112,6 +112,10 @@ class WatcherConfig:
             for t in raw_tlds.split(",")
             if t.strip()
         }
+        human_delay_min = float(os.getenv("HUMAN_DELAY_MIN_SECONDS", "0.8"))
+        human_delay_max = float(os.getenv("HUMAN_DELAY_MAX_SECONDS", "2.5"))
+        human_delay_low = min(human_delay_min, human_delay_max)
+        human_delay_high = max(human_delay_min, human_delay_max)
         return cls(
             poll_seconds=int(os.getenv("WATCHER_POLL_SECONDS", "30")),
             request_timeout_seconds=int(os.getenv("HTTP_TIMEOUT_SECONDS", "20")),
@@ -126,8 +130,8 @@ class WatcherConfig:
             atom_appraisal_url=os.getenv("ATOM_APPRAISAL_API_URL", "").strip(),
             atom_appraisal_api_key=os.getenv("ATOM_APPRAISAL_API_KEY", "").strip(),
             proxy_url=os.getenv("PROXY_URL", "").strip(),
-            human_delay_min_seconds=float(os.getenv("HUMAN_DELAY_MIN_SECONDS", "0.8")),
-            human_delay_max_seconds=float(os.getenv("HUMAN_DELAY_MAX_SECONDS", "2.5")),
+            human_delay_min_seconds=human_delay_low,
+            human_delay_max_seconds=human_delay_high,
             seo_api_url=os.getenv("SEO_API_URL", "").strip(),
             seo_api_key=os.getenv("SEO_API_KEY", "").strip(),
             search_volume_api_url=os.getenv("SEARCH_VOL_API_URL", "").strip(),
@@ -285,9 +289,12 @@ class AtomClient:
         return headers
 
     async def _humanized_delay(self) -> None:
-        low = min(self.cfg.human_delay_min_seconds, self.cfg.human_delay_max_seconds)
-        high = max(self.cfg.human_delay_min_seconds, self.cfg.human_delay_max_seconds)
-        await asyncio.sleep(random.uniform(low, high))
+        await asyncio.sleep(
+            random.uniform(
+                self.cfg.human_delay_min_seconds,
+                self.cfg.human_delay_max_seconds,
+            )
+        )
 
     async def fetch_partnership_domains(self) -> list[DomainOpportunity]:
         if not self.cfg.atom_partnership_url:
@@ -412,7 +419,7 @@ class AtomClient:
         return float(value)
 
     async def seo_backlinks_bonus(self, domain: str) -> tuple[float, str]:
-        if not os.getenv("SEO_API_KEY", "").strip():
+        if not self.cfg.seo_api_key:
             LOGGER.debug("Skipping SEO / Backlinks Check - No API Key")
             return 0.0, "skipped_no_key"
         if not self.cfg.seo_api_url:
@@ -437,22 +444,16 @@ class AtomClient:
         except Exception as exc:
             LOGGER.debug("Skipping SEO / Backlinks Check - %s", exc)
             return 0.0, "request_failed"
+        if not isinstance(data, dict):
+            return 0.0, "invalid_payload"
 
-        score = parse_float(
-            data.get("authority")
-            if isinstance(data, dict)
-            else None
-        ) or parse_float(
-            data.get("backlinks")
-            if isinstance(data, dict)
-            else None
-        )
+        score = parse_float(data.get("authority")) or parse_float(data.get("backlinks"))
         if score and score > 0:
             return self.cfg.seo_bonus_points, "seo_signal_detected"
         return 0.0, "no_signal"
 
     async def search_volume_bonus(self, domain: str) -> tuple[float, str]:
-        if not os.getenv("SEARCH_VOL_API_KEY", "").strip():
+        if not self.cfg.search_volume_api_key:
             LOGGER.debug("Skipping Search Volume Check - No API Key")
             return 0.0, "skipped_no_key"
         if not self.cfg.search_volume_api_url:
@@ -478,22 +479,16 @@ class AtomClient:
         except Exception as exc:
             LOGGER.debug("Skipping Search Volume Check - %s", exc)
             return 0.0, "request_failed"
+        if not isinstance(data, dict):
+            return 0.0, "invalid_payload"
 
-        volume = parse_float(
-            data.get("search_volume")
-            if isinstance(data, dict)
-            else None
-        ) or parse_float(
-            data.get("volume")
-            if isinstance(data, dict)
-            else None
-        )
+        volume = parse_float(data.get("search_volume")) or parse_float(data.get("volume"))
         if volume and volume > 0:
             return self.cfg.search_volume_bonus_points, "volume_signal_detected"
         return 0.0, "no_signal"
 
     async def historical_sales_bonus(self, domain: str) -> tuple[float, str]:
-        if not os.getenv("NAMEBIO_API_KEY", "").strip():
+        if not self.cfg.namebio_api_key:
             LOGGER.debug("Skipping Historical Sales Check - No API Key")
             return 0.0, "skipped_no_key"
         if not self.cfg.namebio_api_url:
