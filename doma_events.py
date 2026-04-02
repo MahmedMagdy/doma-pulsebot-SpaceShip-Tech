@@ -114,8 +114,8 @@ class WatcherConfig:
         }
         human_delay_min = float(os.getenv("HUMAN_DELAY_MIN_SECONDS", "0.8"))
         human_delay_max = float(os.getenv("HUMAN_DELAY_MAX_SECONDS", "2.5"))
-        human_delay_low = min(human_delay_min, human_delay_max)
-        human_delay_high = max(human_delay_min, human_delay_max)
+        delay_min = min(human_delay_min, human_delay_max)
+        delay_max = max(human_delay_min, human_delay_max)
         return cls(
             poll_seconds=int(os.getenv("WATCHER_POLL_SECONDS", "30")),
             request_timeout_seconds=int(os.getenv("HTTP_TIMEOUT_SECONDS", "20")),
@@ -130,8 +130,8 @@ class WatcherConfig:
             atom_appraisal_url=os.getenv("ATOM_APPRAISAL_API_URL", "").strip(),
             atom_appraisal_api_key=os.getenv("ATOM_APPRAISAL_API_KEY", "").strip(),
             proxy_url=os.getenv("PROXY_URL", "").strip(),
-            human_delay_min_seconds=human_delay_low,
-            human_delay_max_seconds=human_delay_high,
+            human_delay_min_seconds=delay_min,
+            human_delay_max_seconds=delay_max,
             seo_api_url=os.getenv("SEO_API_URL", "").strip(),
             seo_api_key=os.getenv("SEO_API_KEY", "").strip(),
             search_volume_api_url=os.getenv("SEARCH_VOL_API_URL", "").strip(),
@@ -447,8 +447,10 @@ class AtomClient:
         if not isinstance(data, dict):
             return 0.0, "invalid_payload"
 
-        score = parse_float(data.get("authority")) or parse_float(data.get("backlinks"))
-        if score and score > 0:
+        seo_score = parse_float(data.get("authority"))
+        if seo_score is None:
+            seo_score = parse_float(data.get("backlinks"))
+        if seo_score is not None and seo_score > 0:
             return self.cfg.seo_bonus_points, "seo_signal_detected"
         return 0.0, "no_signal"
 
@@ -482,8 +484,11 @@ class AtomClient:
         if not isinstance(data, dict):
             return 0.0, "invalid_payload"
 
-        volume = parse_float(data.get("search_volume")) or parse_float(data.get("volume"))
-        if volume and volume > 0:
+        if "search_volume" in data:
+            volume = parse_float(data.get("search_volume"))
+        else:
+            volume = parse_float(data.get("volume"))
+        if volume is not None and volume > 0:
             return self.cfg.search_volume_bonus_points, "volume_signal_detected"
         return 0.0, "no_signal"
 
@@ -515,12 +520,15 @@ class AtomClient:
             LOGGER.debug("Skipping Historical Sales Check - %s", exc)
             return 0.0, "request_failed"
 
-        has_sales = False
-        if isinstance(data, dict):
-            sales_count = parse_float(data.get("sales_count") or data.get("count"))
-            has_sales = bool(sales_count and sales_count > 0)
-            if not has_sales and isinstance(data.get("sales"), list):
-                has_sales = len(data["sales"]) > 0
+        if not isinstance(data, dict):
+            return 0.0, "invalid_payload"
+        if "sales_count" in data:
+            sales_count = parse_float(data.get("sales_count"))
+        else:
+            sales_count = parse_float(data.get("count"))
+        has_sales = bool(sales_count is not None and sales_count > 0)
+        if not has_sales and isinstance(data.get("sales"), list):
+            has_sales = len(data["sales"]) > 0
         if has_sales:
             return self.cfg.historical_sales_bonus_points, "historical_sales_detected"
         return 0.0, "no_signal"
@@ -555,14 +563,18 @@ async def evaluate_opportunity(
         ("search_volume", client.search_volume_bonus),
         ("historical_sales", client.historical_sales_bonus),
     ):
-        bonus, detail = await bonus_fn(opportunity.domain)
+        try:
+            bonus, detail = await bonus_fn(opportunity.domain)
+        except Exception as exc:
+            LOGGER.debug("Skipping %s bonus check due to runtime error: %s", check_name, exc)
+            continue
         if bonus > 0:
             bonus_total += bonus
             bonus_parts.append(f"{check_name}=+{bonus:.2f}({detail})")
 
     if bonus_total > 0:
         estimated += bonus_total
-        reason = f"{reason}; bonus_total=+{bonus_total:.2f}; " + ", ".join(bonus_parts)
+        reason = f"{reason}; bonus_total=+{bonus_total:.2f}; {', '.join(bonus_parts)}"
         LOGGER.info(
             "Applied optional bonuses domain=%s total_bonus=$%.2f details=%s",
             opportunity.domain,
@@ -638,8 +650,8 @@ async def watch_events(app: Application, chat_id: int) -> None:
         bool(cfg.atom_partnership_url),
         bool(cfg.atom_appraisal_url),
         bool(cfg.proxy_url),
-        min(cfg.human_delay_min_seconds, cfg.human_delay_max_seconds),
-        max(cfg.human_delay_min_seconds, cfg.human_delay_max_seconds),
+        cfg.human_delay_min_seconds,
+        cfg.human_delay_max_seconds,
     )
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
