@@ -7,10 +7,14 @@ A real-time Telegram bot for **domain sale alerts on the Doma Protocol** — bui
 
 ## 🧠 What It Does
 
-**Doma PulseBot** helps users stay ahead of the market by simulating domain sales and sending **real-time alerts** on Telegram — with:
+**Doma PulseBot** now tracks real-world domain opportunities and sends **real-time alerts** on Telegram — with:
 
 - 🔔 Auto-updating alerts every 30 seconds  
-- 🌐 Domain name, price, and buy link included  
+- 🌐 Domain name, price, source, and buy link included  
+- 🎯 Laser filters for `.app`, `.dev`, `.com` + keyword + length rules
+- 🔥 HOT DEAL scoring for near-reg premium keywords / deep discounts
+- 🧠 SQLite dedupe to avoid repeat alerts
+- 🎛 Inline action buttons for instant buy + Whois lookup
 - ✅ `/start` to subscribe  
 - 🛑 `/unsubscribe` to stop  
 - ⚙️ `/filter` to customize (expandable)  
@@ -45,15 +49,14 @@ A real-time Telegram bot for **domain sale alerts on the Doma Protocol** — bui
 
 ---
 
-## 🔗 Doma Integration
+## 🔍 Real Data Sources (Watcher)
 
-While the current demo uses **simulated domain events**, each alert is formatted exactly like real Doma sales:
+The watcher replaces the old mock generator and supports:
 
-- Real TLDs: `.ape`, `.core`, `.vic`, etc.  
-- Real links to Doma: `https://start.doma.xyz/market/{domain}`  
-- Simulated logic mimics on-chain pricing & events  
+- **GoDaddy Availability API** (real-time availability + price checks)
+- **ExpiredDomains source URL** via ethical scraping (HTML parsing with BeautifulSoup)
 
-⚙️ Easily pluggable into Doma's on-chain smart contracts or subgraphs.
+Both sources feed a common async pipeline with filtering, scoring, and dedupe.
 
 ---
 
@@ -93,6 +96,24 @@ pip install -r requirements.txt
 ```
 TELEGRAM_TOKEN=your_bot_token
 DEFAULT_CHAT_ID=your_chat_id_here
+
+# Optional but recommended (real API source)
+GODADDY_API_KEY=your_api_key
+GODADDY_API_SECRET=your_api_secret
+# true for GoDaddy OTE sandbox, false for production API
+GODADDY_USE_OTE=false
+
+# Optional scraping source URL (you must comply with source ToS/robots)
+EXPIRED_DOMAINS_URL=
+
+# Watcher filters/tuning
+ALLOWED_TLDS=.app,.dev,.com
+DOMAIN_KEYWORDS=ai,app,bot,cloud,code,data,dev,labs,ml,saas,tech,web
+MAX_SLD_LENGTH=5
+STANDARD_REG_MAX_USD=15
+DISCOUNT_TRIGGER_PERCENT=50
+WATCHER_POLL_SECONDS=30
+ALERT_DB_PATH=alerts.db
 ```
 
 ### 4. Run the bot
@@ -107,7 +128,7 @@ python bot.py
 ```
 doma-pulsebot/
 ├── bot.py               # Main bot logic
-├── doma_events.py       # Simulated Doma events
+├── doma_events.py       # Real async watcher + sources + scoring + dedupe
 ├── doma_utils.py        # Formatting helpers
 ├── filters.json         # Filter config (WIP)
 ├── requirements.txt     # Python deps
