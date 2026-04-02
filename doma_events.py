@@ -385,7 +385,12 @@ class AtomClient:
         return max(0, int(remaining))
 
     def _backoff_seconds(self, attempt: int) -> float:
-        exponential = self.cfg.retry_base_seconds * (2 ** (attempt - 1))
+        cap_multiplier = max(
+            1.0,
+            self.cfg.max_backoff_seconds / max(self.cfg.retry_base_seconds, MIN_RETRY_BASE_SECONDS),
+        )
+        safe_multiplier = min(2 ** (attempt - 1), cap_multiplier)
+        exponential = self.cfg.retry_base_seconds * safe_multiplier
         jitter = random.uniform(JITTER_MIN_SECONDS, JITTER_MAX_SECONDS)
         return min(self.cfg.max_backoff_seconds, exponential + jitter)
 
@@ -602,7 +607,9 @@ class AtomClient:
                 )
                 await asyncio.sleep(wait_seconds)
         else:
-            raise AppraisalUnavailableError("AI appraisal retries exhausted")
+            raise AppraisalUnavailableError(
+                f"AI appraisal retries exhausted for {domain} after {self.cfg.max_retry_attempts} attempts"
+            )
 
         value = None
         if isinstance(data, dict):

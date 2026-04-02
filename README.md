@@ -214,6 +214,7 @@ sudo journalctl -u doma-pulsebot -f
 ## 4) Operational Notes
 
 - The watcher now uses **UTC Golden Hours** (`TURBO_HOURS_UTC`) for turbo polling.
+- Same-hour `TURBO_HOURS_UTC` entries (like `18-18`) are auto-converted to a 1-hour window (`18-19`).
 - Outside Golden Hours, it uses eco polling to preserve quotas.
 - Requests include randomized jitter + retry backoff + 429 cooldown handling.
 - Keep API keys private and rotate keys if any leak is suspected.
