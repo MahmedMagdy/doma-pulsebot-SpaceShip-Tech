@@ -16,6 +16,8 @@ from telegram.ext import Application
 
 LOGGER = logging.getLogger(__name__)
 SPECIAL_CHARS = r"_*[]()~`>#+-=|{}.!"
+GODADDY_MICRO_PRICE_THRESHOLD = 1000.0
+GODADDY_MICRO_DIVISOR = 1_000_000.0
 
 
 def escape_md_v2(value: str) -> str:
@@ -78,6 +80,20 @@ class WatcherConfig:
     go_use_ote: bool = False
     expired_domains_url: str = ""
     http_timeout_seconds: int = 20
+    supplemental_words: list[str] = field(
+        default_factory=lambda: [
+            "byte",
+            "build",
+            "chip",
+            "drive",
+            "forge",
+            "logic",
+            "model",
+            "stack",
+            "sync",
+            "token",
+        ]
+    )
 
     @classmethod
     def from_env(cls) -> "WatcherConfig":
@@ -117,6 +133,14 @@ class WatcherConfig:
             go_use_ote=os.getenv("GODADDY_USE_OTE", "false").lower() == "true",
             expired_domains_url=os.getenv("EXPIRED_DOMAINS_URL", "").strip(),
             http_timeout_seconds=int(os.getenv("HTTP_TIMEOUT_SECONDS", "20")),
+            supplemental_words=[
+                w.strip().lower()
+                for w in os.getenv(
+                    "SUPPLEMENTAL_WORDS",
+                    "byte,build,chip,drive,forge,logic,model,stack,sync,token",
+                ).split(",")
+                if w.strip()
+            ],
         )
 
 
@@ -208,8 +232,8 @@ class GoDaddyAvailabilitySource:
                 price_usd = float(raw_price)
                 # GoDaddy returns integer price in micros for many products.
                 # Example: 12990000 => 12.99 USD.
-                if price_usd > 1000:
-                    price_usd = round(price_usd / 1_000_000, 2)
+                if price_usd > GODADDY_MICRO_PRICE_THRESHOLD:
+                    price_usd = round(price_usd / GODADDY_MICRO_DIVISOR, 2)
             return DomainListing(
                 domain=domain.lower(),
                 source="GoDaddy",
@@ -221,12 +245,18 @@ class GoDaddyAvailabilitySource:
 
 
 class ExpiredDomainsScraperSource:
-    DOMAIN_RE = re.compile(r"^[a-z0-9-]+\.(?:app|dev|com)$", re.IGNORECASE)
     PRICE_RE = re.compile(r"\$?\s*([0-9]+(?:\.[0-9]{1,2})?)")
 
-    def __init__(self, session: aiohttp.ClientSession, page_url: str) -> None:
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        page_url: str,
+        allowed_tlds: set[str],
+    ) -> None:
         self.session = session
         self.page_url = page_url
+        tld_pattern = "|".join(sorted(tld.lstrip(".") for tld in allowed_tlds))
+        self.domain_re = re.compile(rf"^[a-z0-9-]+\.(?:{tld_pattern})$", re.IGNORECASE)
 
     async def fetch(self) -> list[DomainListing]:
         async with self.session.get(self.page_url) as response:
@@ -246,7 +276,7 @@ class ExpiredDomainsScraperSource:
             text_cells = [cell.get_text(" ", strip=True) for cell in row.find_all("td")]
             if not text_cells:
                 continue
-            domain = next((c for c in text_cells if self.DOMAIN_RE.match(c)), None)
+            domain = next((c for c in text_cells if self.domain_re.match(c)), None)
             if not domain:
                 continue
             joined = " ".join(text_cells)
@@ -324,18 +354,7 @@ def format_alert(listing: DomainListing, hot_reason: Optional[str]) -> str:
 
 
 def build_candidates(cfg: WatcherConfig) -> list[str]:
-    base_words = sorted(cfg.keywords) + [
-        "byte",
-        "build",
-        "chip",
-        "drive",
-        "forge",
-        "logic",
-        "model",
-        "stack",
-        "sync",
-        "token",
-    ]
+    base_words = sorted(cfg.keywords) + cfg.supplemental_words
     short_words = [w for w in base_words if len(w) <= cfg.max_sld_len]
     if not short_words:
         short_words = ["ai", "dev", "app", "bot", "code"]
@@ -386,7 +405,7 @@ async def watch_events(app: Application, chat_id: int) -> None:
             else None
         )
         exp_source = (
-            ExpiredDomainsScraperSource(session, cfg.expired_domains_url)
+            ExpiredDomainsScraperSource(session, cfg.expired_domains_url, cfg.allowed_tlds)
             if cfg.expired_domains_url
             else None
         )

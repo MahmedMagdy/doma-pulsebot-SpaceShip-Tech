@@ -103,7 +103,7 @@ GODADDY_API_SECRET=your_api_secret
 # true for GoDaddy OTE sandbox, false for production API
 GODADDY_USE_OTE=false
 
-# Optional scraping source URL (you must comply with source ToS/robots)
+# Optional scraping source URL (you must comply with source ToS/robots.txt)
 EXPIRED_DOMAINS_URL=
 
 # Watcher filters/tuning
