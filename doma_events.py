@@ -1,11 +1,14 @@
 import asyncio
+from functools import partial
 import logging
 import os
 import random
 import re
 import sqlite3
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Iterable, List, Optional, Sequence
 
 import aiohttp
@@ -18,6 +21,75 @@ LOGGER = logging.getLogger(__name__)
 SPECIAL_CHARS = r"_*[]()~`>#+-=|{}.!"
 GODADDY_MICRO_PRICE_THRESHOLD = 1000.0
 GODADDY_MICRO_DIVISOR = 1_000_000.0
+
+
+class RetryableAPIError(Exception):
+    def __init__(self, message: str, retry_after_seconds: Optional[float] = None) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
+class EndpointNotFoundError(RuntimeError):
+    pass
+
+
+def parse_retry_after_seconds(value: Optional[str]) -> Optional[float]:
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        pass
+    try:
+        dt = parsedate_to_datetime(text)
+        now = datetime.now(timezone.utc)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return max(0.0, (dt - now).total_seconds())
+    except (TypeError, ValueError):
+        return None
+
+
+async def with_exponential_backoff(
+    op,
+    *,
+    op_name: str,
+    base_delay_seconds: float,
+    cap_delay_seconds: float,
+    max_retries: int,
+):
+    attempt = 0
+    while True:
+        try:
+            return await op()
+        except (
+            RetryableAPIError,
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+        ) as exc:
+            if attempt >= max_retries:
+                raise
+            retry_after = (
+                exc.retry_after_seconds
+                if isinstance(exc, RetryableAPIError)
+                else None
+            )
+            exponential = min(cap_delay_seconds, base_delay_seconds * (2 ** (attempt + 1)))
+            jitter = random.uniform(0, base_delay_seconds)
+            delay = max(exponential + jitter, retry_after or 0.0)
+            LOGGER.warning(
+                "%s failed (%s). Retrying in %.2fs (attempt %s/%s).",
+                op_name,
+                exc,
+                delay,
+                attempt + 1,
+                max_retries,
+            )
+            await asyncio.sleep(delay)
+            attempt += 1
 
 
 def escape_md_v2(value: str) -> str:
@@ -56,7 +128,7 @@ class DomainListing:
 class WatcherConfig:
     poll_seconds: int = 30
     allowed_tlds: set[str] = field(default_factory=lambda: {".app", ".dev", ".com"})
-    max_sld_len: int = 5
+    max_sld_len: int = 14
     keywords: set[str] = field(
         default_factory=lambda: {
             "ai",
@@ -76,9 +148,17 @@ class WatcherConfig:
     standard_reg_max: float = 15.0
     discount_trigger_pct: float = 50.0
     db_path: str = "alerts.db"
-    go_candidates_per_cycle: int = 20
+    candidates_per_cycle: int = 20
+    per_source_concurrency: int = 10
+    batch_check_size: int = 50
+    max_retries: int = 4
+    backoff_base_seconds: float = 0.5
+    backoff_cap_seconds: float = 8.0
     go_use_ote: bool = False
+    namecheap_use_sandbox: bool = False
+    namecom_base_url: str = "https://api.name.com"
     expired_domains_url: str = ""
+    allow_unofficial_scraping: bool = False
     http_timeout_seconds: int = 20
     supplemental_words: list[str] = field(
         default_factory=lambda: [
@@ -107,10 +187,15 @@ class WatcherConfig:
             for t in os.getenv("ALLOWED_TLDS", ".app,.dev,.com").split(",")
             if t.strip()
         }
+        legacy_go_candidates = os.getenv("GODADDY_CANDIDATES_PER_CYCLE", "").strip()
+        if legacy_go_candidates and not os.getenv("CANDIDATES_PER_CYCLE", "").strip():
+            LOGGER.warning(
+                "GODADDY_CANDIDATES_PER_CYCLE is deprecated; use CANDIDATES_PER_CYCLE."
+            )
         return cls(
             poll_seconds=int(os.getenv("WATCHER_POLL_SECONDS", "30")),
             allowed_tlds=tlds or {".app", ".dev", ".com"},
-            max_sld_len=int(os.getenv("MAX_SLD_LENGTH", "5")),
+            max_sld_len=int(os.getenv("MAX_SLD_LENGTH", "14")),
             keywords=keywords
             or {
                 "ai",
@@ -129,9 +214,22 @@ class WatcherConfig:
             standard_reg_max=float(os.getenv("STANDARD_REG_MAX_USD", "15")),
             discount_trigger_pct=float(os.getenv("DISCOUNT_TRIGGER_PERCENT", "50")),
             db_path=os.getenv("ALERT_DB_PATH", "alerts.db"),
-            go_candidates_per_cycle=int(os.getenv("GODADDY_CANDIDATES_PER_CYCLE", "20")),
+            candidates_per_cycle=int(
+                os.getenv(
+                    "CANDIDATES_PER_CYCLE",
+                    legacy_go_candidates or "20",
+                )
+            ),
+            per_source_concurrency=int(os.getenv("PER_SOURCE_CONCURRENCY", "10")),
+            batch_check_size=int(os.getenv("BATCH_CHECK_SIZE", "50")),
+            max_retries=int(os.getenv("API_MAX_RETRIES", "4")),
+            backoff_base_seconds=float(os.getenv("BACKOFF_BASE_SECONDS", "0.5")),
+            backoff_cap_seconds=float(os.getenv("BACKOFF_CAP_SECONDS", "8.0")),
             go_use_ote=os.getenv("GODADDY_USE_OTE", "false").lower() == "true",
+            namecheap_use_sandbox=os.getenv("NAMECHEAP_USE_SANDBOX", "false").lower() == "true",
+            namecom_base_url=os.getenv("NAMECOM_BASE_URL", "").strip() or "https://api.name.com",
             expired_domains_url=os.getenv("EXPIRED_DOMAINS_URL", "").strip(),
+            allow_unofficial_scraping=os.getenv("ALLOW_UNOFFICIAL_SCRAPING", "false").lower() == "true",
             http_timeout_seconds=int(os.getenv("HTTP_TIMEOUT_SECONDS", "20")),
             supplemental_words=[
                 w.strip().lower()
@@ -186,10 +284,19 @@ class GoDaddyAvailabilitySource:
         api_key: str,
         api_secret: str,
         use_ote: bool,
+        max_retries: int,
+        base_delay_seconds: float,
+        cap_delay_seconds: float,
+        per_source_concurrency: int,
     ) -> None:
         self.session = session
         self.api_key = api_key
         self.api_secret = api_secret
+        self.max_retries = max_retries
+        self.base_delay_seconds = base_delay_seconds
+        self.cap_delay_seconds = cap_delay_seconds
+        self.per_source_concurrency = per_source_concurrency
+        self._semaphore = asyncio.Semaphore(self.per_source_concurrency)
         self.base_url = (
             "https://api.ote-godaddy.com"
             if use_ote
@@ -198,7 +305,12 @@ class GoDaddyAvailabilitySource:
 
     async def fetch(self, candidates: Sequence[str]) -> list[DomainListing]:
         headers = {"Authorization": f"sso-key {self.api_key}:{self.api_secret}"}
-        tasks = [self._check_domain(domain, headers) for domain in candidates]
+
+        async def guarded(domain: str) -> Optional[DomainListing]:
+            async with self._semaphore:
+                return await self._check_domain(domain, headers)
+
+        tasks = [guarded(domain) for domain in candidates]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         listings: list[DomainListing] = []
         for result in results:
@@ -212,36 +324,321 @@ class GoDaddyAvailabilitySource:
         self, domain: str, headers: dict[str, str]
     ) -> Optional[DomainListing]:
         url = f"{self.base_url}/v1/domains/available"
-        async with self.session.get(
-            url,
-            headers=headers,
-            params={"domain": domain, "checkType": "FAST"},
-        ) as response:
-            if response.status != 200:
-                body = await response.text()
-                raise RuntimeError(
-                    f"GoDaddy API status={response.status} domain={domain} body={body[:300]}"
-                )
-            payload = await response.json()
-            if not payload.get("available"):
-                return None
+        async def op() -> Optional[DomainListing]:
+            async with self.session.get(
+                url,
+                headers=headers,
+                params={"domain": domain, "checkType": "FAST"},
+            ) as response:
+                if response.status == 429:
+                    raise RetryableAPIError(
+                        "GoDaddy rate limited",
+                        parse_retry_after_seconds(response.headers.get("Retry-After")),
+                    )
+                if response.status >= 500:
+                    raise RetryableAPIError(f"GoDaddy server error: {response.status}")
+                if response.status != 200:
+                    body = await response.text()
+                    raise RuntimeError(
+                        f"GoDaddy API status={response.status} domain={domain} body={body[:300]}"
+                    )
+                payload = await response.json()
+                if not payload.get("available"):
+                    return None
 
-            raw_price = payload.get("price")
-            price_usd = None
-            if isinstance(raw_price, (int, float)):
-                price_usd = float(raw_price)
-                # GoDaddy returns integer price in micros for many products.
-                # Example: 12990000 => 12.99 USD.
-                if price_usd > GODADDY_MICRO_PRICE_THRESHOLD:
-                    price_usd = round(price_usd / GODADDY_MICRO_DIVISOR, 2)
-            return DomainListing(
-                domain=domain.lower(),
-                source="GoDaddy",
-                buy_url=f"https://www.godaddy.com/domainsearch/find?domainToCheck={domain}",
-                price_usd=price_usd,
-                currency=payload.get("currency", "USD"),
-                is_drop=True,
-            )
+                raw_price = payload.get("price")
+                price_usd = None
+                if isinstance(raw_price, (int, float)):
+                    price_usd = float(raw_price)
+                    # GoDaddy returns integer price in micros for many products.
+                    # Example: 12990000 => 12.99 USD.
+                    if price_usd > GODADDY_MICRO_PRICE_THRESHOLD:
+                        price_usd = round(price_usd / GODADDY_MICRO_DIVISOR, 2)
+                return DomainListing(
+                    domain=domain.lower(),
+                    source="GoDaddy",
+                    buy_url=f"https://www.godaddy.com/domainsearch/find?domainToCheck={domain}",
+                    price_usd=price_usd,
+                    currency=payload.get("currency", "USD"),
+                    is_drop=True,
+                )
+
+        return await with_exponential_backoff(
+            op,
+            op_name=f"GoDaddy check {domain}",
+            base_delay_seconds=self.base_delay_seconds,
+            cap_delay_seconds=self.cap_delay_seconds,
+            max_retries=self.max_retries,
+        )
+
+
+class NamecheapAvailabilitySource:
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        api_user: str,
+        api_key: str,
+        username: str,
+        client_ip: str,
+        use_sandbox: bool,
+        batch_check_size: int,
+        max_retries: int,
+        base_delay_seconds: float,
+        cap_delay_seconds: float,
+    ) -> None:
+        self.session = session
+        self.api_user = api_user
+        self.api_key = api_key
+        self.username = username
+        self.client_ip = client_ip
+        self.batch_check_size = batch_check_size
+        self.max_retries = max_retries
+        self.base_delay_seconds = base_delay_seconds
+        self.cap_delay_seconds = cap_delay_seconds
+        self.base_url = (
+            "https://api.sandbox.namecheap.com/xml.response"
+            if use_sandbox
+            else "https://api.namecheap.com/xml.response"
+        )
+
+    async def fetch(self, candidates: Sequence[str]) -> list[DomainListing]:
+        if not candidates:
+            return []
+        deduped = list(dict.fromkeys(candidates))
+        chunks = [
+            deduped[idx : idx + self.batch_check_size]
+            for idx in range(0, len(deduped), self.batch_check_size)
+        ]
+        tasks = [self._check_batch(batch) for batch in chunks if batch]
+        if not tasks:
+            return []
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        listings: list[DomainListing] = []
+        for result in results:
+            if isinstance(result, list):
+                listings.extend(result)
+            elif isinstance(result, Exception):
+                LOGGER.warning("Namecheap lookup failed: %s", result)
+        return listings
+
+    async def _check_batch(self, domains: Sequence[str]) -> list[DomainListing]:
+        params = {
+            "ApiUser": self.api_user,
+            "ApiKey": self.api_key,
+            "UserName": self.username,
+            "ClientIp": self.client_ip,
+            "Command": "namecheap.domains.check",
+            "DomainList": ",".join(domains),
+        }
+
+        async def op() -> list[DomainListing]:
+            async with self.session.get(self.base_url, params=params) as response:
+                if response.status == 429:
+                    raise RetryableAPIError(
+                        "Namecheap rate limited",
+                        parse_retry_after_seconds(response.headers.get("Retry-After")),
+                    )
+                if response.status >= 500:
+                    raise RetryableAPIError(f"Namecheap server error: {response.status}")
+                if response.status != 200:
+                    body = await response.text()
+                    raise RuntimeError(
+                        f"Namecheap API status={response.status} body={body[:300]}"
+                    )
+
+                xml_text = await response.text()
+                root = ET.fromstring(xml_text)
+                listings: list[DomainListing] = []
+                for node in root.iter():
+                    if not node.tag.endswith("DomainCheckResult"):
+                        continue
+                    domain = (node.attrib.get("Domain") or "").strip().lower()
+                    if not domain:
+                        continue
+                    if node.attrib.get("Available", "false").lower() != "true":
+                        continue
+
+                    price_usd = None
+                    for key in (
+                        "PremiumRegistrationPrice",
+                        "RegistrationPrice",
+                        "Price",
+                    ):
+                        raw = node.attrib.get(key)
+                        if raw is None:
+                            continue
+                        try:
+                            price_usd = float(raw)
+                            break
+                        except ValueError:
+                            continue
+
+                    listings.append(
+                        DomainListing(
+                            domain=domain,
+                            source="Namecheap",
+                            buy_url=f"https://www.namecheap.com/domains/registration/results/?domain={domain}",
+                            price_usd=price_usd,
+                            currency="USD",
+                            is_drop=True,
+                        )
+                    )
+                return listings
+
+        return await with_exponential_backoff(
+            op,
+            op_name=f"Namecheap batch check ({len(domains)} domains)",
+            base_delay_seconds=self.base_delay_seconds,
+            cap_delay_seconds=self.cap_delay_seconds,
+            max_retries=self.max_retries,
+        )
+
+
+class NameComAvailabilitySource:
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        username: str,
+        token: str,
+        base_url: str,
+        batch_check_size: int,
+        max_retries: int,
+        base_delay_seconds: float,
+        cap_delay_seconds: float,
+    ) -> None:
+        self.session = session
+        self.auth = aiohttp.BasicAuth(login=username, password=token)
+        self.base_url = base_url.rstrip("/")
+        self.batch_check_size = batch_check_size
+        self.max_retries = max_retries
+        self.base_delay_seconds = base_delay_seconds
+        self.cap_delay_seconds = cap_delay_seconds
+
+    async def fetch(self, candidates: Sequence[str]) -> list[DomainListing]:
+        if not candidates:
+            return []
+        deduped = list(dict.fromkeys(candidates))
+        chunks = [
+            deduped[idx : idx + self.batch_check_size]
+            for idx in range(0, len(deduped), self.batch_check_size)
+        ]
+        tasks = [self._check_batch(batch) for batch in chunks if batch]
+        if not tasks:
+            return []
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        listings: list[DomainListing] = []
+        for result in results:
+            if isinstance(result, list):
+                listings.extend(result)
+            elif isinstance(result, Exception):
+                LOGGER.warning("Name.com lookup failed: %s", result)
+        return listings
+
+    async def _check_batch(self, domains: Sequence[str]) -> list[DomainListing]:
+        endpoints = (
+            "/v4/domains:checkAvailability",
+            "/v4/domains/checkAvailability",
+        )
+        payload = {"domainNames": list(domains)}
+        last_error: Optional[Exception] = None
+
+        async def do_request(endpoint: str) -> list[DomainListing]:
+            async with self.session.post(
+                f"{self.base_url}{endpoint}",
+                auth=self.auth,
+                json=payload,
+            ) as response:
+                if response.status == 404:
+                    raise EndpointNotFoundError(endpoint)
+                if response.status == 429:
+                    raise RetryableAPIError(
+                        "Name.com rate limited",
+                        parse_retry_after_seconds(response.headers.get("Retry-After")),
+                    )
+                if response.status >= 500:
+                    raise RetryableAPIError(f"Name.com server error: {response.status}")
+                if response.status in (401, 403):
+                    body = await response.text()
+                    raise RuntimeError(
+                        f"Name.com authentication failed status={response.status} body={body[:300]}"
+                    )
+                if response.status != 200:
+                    body = await response.text()
+                    raise RuntimeError(
+                        f"Name.com API status={response.status} body={body[:300]}"
+                    )
+
+                payload_json = await response.json()
+                raw_rows = payload_json.get("results")
+                if not isinstance(raw_rows, list):
+                    raw_rows = [payload_json]
+                listings: list[DomainListing] = []
+                for row in raw_rows:
+                    if not isinstance(row, dict):
+                        continue
+                    domain = (
+                        row.get("domainName")
+                        or row.get("domain")
+                        or row.get("hostname")
+                        or ""
+                    ).strip().lower()
+                    if not domain:
+                        continue
+                    available = row.get("purchasable")
+                    if available is None:
+                        available = row.get("available")
+                    if not bool(available):
+                        continue
+                    price_usd = None
+                    for key in ("purchasePrice", "price", "premiumPrice"):
+                        raw = row.get(key)
+                        if raw is None:
+                            continue
+                        try:
+                            price_usd = float(raw)
+                            break
+                        except (TypeError, ValueError):
+                            continue
+
+                    listings.append(
+                        DomainListing(
+                            domain=domain,
+                            source="Name.com",
+                            buy_url=f"https://www.name.com/domain/search/{domain}",
+                            price_usd=price_usd,
+                            currency="USD",
+                            is_drop=True,
+                        )
+                    )
+                return listings
+
+        for endpoint in endpoints:
+            try:
+                return await with_exponential_backoff(
+                    partial(do_request, endpoint),
+                    op_name=f"Name.com batch check ({len(domains)} domains)",
+                    base_delay_seconds=self.base_delay_seconds,
+                    cap_delay_seconds=self.cap_delay_seconds,
+                    max_retries=self.max_retries,
+                )
+            except EndpointNotFoundError as exc:
+                last_error = exc
+                continue
+            except (
+                RetryableAPIError,
+                aiohttp.ClientError,
+                asyncio.TimeoutError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+            ) as exc:
+                last_error = exc
+                break
+
+        raise RuntimeError(
+            "Name.com API endpoint unavailable: "
+            f"{type(last_error).__name__}: {last_error}"
+        )
 
 
 class ExpiredDomainsScraperSource:
@@ -361,7 +758,7 @@ def build_candidates(cfg: WatcherConfig) -> list[str]:
     allowed_tlds = tuple(cfg.allowed_tlds)
 
     domains = set()
-    for _ in range(cfg.go_candidates_per_cycle):
+    for _ in range(cfg.candidates_per_cycle):
         word = random.choice(short_words)
         tld = random.choice(allowed_tlds)
         domains.add(f"{word}{tld}")
@@ -395,19 +792,79 @@ async def watch_events(app: Application, chat_id: int) -> None:
     go_secret = os.getenv("GODADDY_API_SECRET", "").strip()
     have_godaddy = bool(go_key and go_secret)
 
+    namecheap_api_user = os.getenv("NAMECHEAP_API_USER", "").strip()
+    namecheap_api_key = os.getenv("NAMECHEAP_API_KEY", "").strip()
+    namecheap_username = os.getenv("NAMECHEAP_USERNAME", "").strip()
+    namecheap_client_ip = os.getenv("NAMECHEAP_CLIENT_IP", "").strip()
+    have_namecheap = bool(
+        namecheap_api_user
+        and namecheap_api_key
+        and namecheap_username
+        and namecheap_client_ip
+    )
+
+    namecom_username = os.getenv("NAMECOM_USERNAME", "").strip()
+    namecom_token = os.getenv("NAMECOM_TOKEN", "").strip()
+    have_namecom = bool(namecom_username and namecom_token)
+
     LOGGER.info("Starting domain watcher with tlds=%s, max_sld_len=%s", cfg.allowed_tlds, cfg.max_sld_len)
-    if not have_godaddy and not cfg.expired_domains_url:
-        LOGGER.warning("No real data source configured. Set GoDaddy API keys and/or EXPIRED_DOMAINS_URL.")
+    if not have_godaddy and not have_namecheap and not have_namecom:
+        LOGGER.warning(
+            "No official registrar API configured. Set GoDaddy, Namecheap, and/or Name.com credentials."
+        )
+    if cfg.expired_domains_url and not cfg.allow_unofficial_scraping:
+        LOGGER.warning(
+            "EXPIRED_DOMAINS_URL is set but unofficial scraping is disabled; skipping scraper source."
+        )
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
         go_source = (
-            GoDaddyAvailabilitySource(session, go_key, go_secret, cfg.go_use_ote)
+            GoDaddyAvailabilitySource(
+                session,
+                go_key,
+                go_secret,
+                cfg.go_use_ote,
+                cfg.max_retries,
+                cfg.backoff_base_seconds,
+                cfg.backoff_cap_seconds,
+                cfg.per_source_concurrency,
+            )
             if have_godaddy
+            else None
+        )
+        namecheap_source = (
+            NamecheapAvailabilitySource(
+                session,
+                namecheap_api_user,
+                namecheap_api_key,
+                namecheap_username,
+                namecheap_client_ip,
+                cfg.namecheap_use_sandbox,
+                cfg.batch_check_size,
+                cfg.max_retries,
+                cfg.backoff_base_seconds,
+                cfg.backoff_cap_seconds,
+            )
+            if have_namecheap
+            else None
+        )
+        namecom_source = (
+            NameComAvailabilitySource(
+                session,
+                namecom_username,
+                namecom_token,
+                cfg.namecom_base_url,
+                cfg.batch_check_size,
+                cfg.max_retries,
+                cfg.backoff_base_seconds,
+                cfg.backoff_cap_seconds,
+            )
+            if have_namecom
             else None
         )
         exp_source = (
             ExpiredDomainsScraperSource(session, cfg.expired_domains_url, cfg.allowed_tlds)
-            if cfg.expired_domains_url
+            if cfg.expired_domains_url and cfg.allow_unofficial_scraping
             else None
         )
 
@@ -419,6 +876,12 @@ async def watch_events(app: Application, chat_id: int) -> None:
                 if go_source:
                     candidates = build_candidates(cfg)
                     tasks.append(asyncio.create_task(go_source.fetch(candidates)))
+                if namecheap_source:
+                    candidates = build_candidates(cfg)
+                    tasks.append(asyncio.create_task(namecheap_source.fetch(candidates)))
+                if namecom_source:
+                    candidates = build_candidates(cfg)
+                    tasks.append(asyncio.create_task(namecom_source.fetch(candidates)))
                 if exp_source:
                     tasks.append(asyncio.create_task(exp_source.fetch()))
 
