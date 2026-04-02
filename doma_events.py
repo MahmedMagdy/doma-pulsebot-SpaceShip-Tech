@@ -292,6 +292,7 @@ class AtomClient:
         self.cfg = cfg
         self._partnership_url = cfg.atom_partnership_url
         self._quota_backoff_until_monotonic = 0.0
+        self._logged_trademark_config_warning = False
 
     def _headers(self, api_key: str) -> dict[str, str]:
         headers = {"Accept": "application/json"}
@@ -565,7 +566,9 @@ class AtomClient:
 
     async def passes_trademark_filter(self, domain: str) -> bool:
         if not self.cfg.atom_trademark_url:
-            LOGGER.warning("Trademark API URL not configured - bypassing filter for %s", domain)
+            if not self._logged_trademark_config_warning:
+                LOGGER.warning("Trademark API URL not configured - bypassing trademark filter")
+                self._logged_trademark_config_warning = True
             return True
 
         payload = {"domain": domain}
