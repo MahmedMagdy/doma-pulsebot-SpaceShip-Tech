@@ -62,6 +62,7 @@ def main():
         raise ValueError("❌ TELEGRAM_TOKEN not set in .env")
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    watcher_task: asyncio.Task | None = None
 
     # Bot Commands
     app.add_handler(CommandHandler("start", start))
@@ -69,14 +70,22 @@ def main():
     app.add_handler(CommandHandler("filter", filter_command))
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    # 👇 Launch background event watcher with test Chat ID
-    async def run_all():
-        await watch_events(app, DEFAULT_CHAT_ID)
+    async def post_init(application):
+        nonlocal watcher_task
+        watcher_task = asyncio.create_task(watch_events(application, DEFAULT_CHAT_ID))
+        logging.info("✅ Background domain watcher started")
 
-    # 🔁 Run bot + background task
-    loop = asyncio.get_event_loop()
-    loop.create_task(run_all())
+    async def post_shutdown(_application):
+        if watcher_task:
+            watcher_task.cancel()
+            try:
+                await watcher_task
+            except asyncio.CancelledError:
+                pass
+            logging.info("🛑 Background domain watcher stopped")
 
+    app.post_init = post_init
+    app.post_shutdown = post_shutdown
     print("🤖 Bot & Event Watcher running...")
     app.run_polling()
 
