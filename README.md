@@ -54,7 +54,9 @@ A real-time Telegram bot for **domain sale alerts on the Doma Protocol** — bui
 The watcher replaces the old mock generator and supports:
 
 - **GoDaddy Availability API** (real-time availability + price checks)
-- **ExpiredDomains source URL** via ethical scraping (HTML parsing with BeautifulSoup)
+- **Namecheap Official API** (`namecheap.domains.check`)
+- **Name.com Official API** (authenticated availability checks)
+- **ExpiredDomains source URL** via optional ethical scraping (disabled by default)
 
 Both sources feed a common async pipeline with filtering, scoring, and dedupe.
 
@@ -109,11 +111,36 @@ EXPIRED_DOMAINS_URL=
 # Watcher filters/tuning
 ALLOWED_TLDS=.app,.dev,.com
 DOMAIN_KEYWORDS=ai,app,bot,cloud,code,data,dev,labs,ml,saas,tech,web
-MAX_SLD_LENGTH=5
+MAX_SLD_LENGTH=14
 STANDARD_REG_MAX_USD=15
 DISCOUNT_TRIGGER_PERCENT=50
 WATCHER_POLL_SECONDS=30
 ALERT_DB_PATH=alerts.db
+
+# Candidate generation and async throughput
+CANDIDATES_PER_CYCLE=20
+PER_SOURCE_CONCURRENCY=10
+
+# Retry/backoff controls for registrar APIs
+API_MAX_RETRIES=4
+BACKOFF_BASE_SECONDS=0.5
+BACKOFF_CAP_SECONDS=8.0
+
+# Namecheap official API (required fields)
+NAMECHEAP_API_USER=
+NAMECHEAP_API_KEY=
+NAMECHEAP_USERNAME=
+NAMECHEAP_CLIENT_IP=
+NAMECHEAP_USE_SANDBOX=false
+
+# Name.com official API
+NAMECOM_USERNAME=
+NAMECOM_TOKEN=
+NAMECOM_BASE_URL=https://api.name.com
+
+# Optional scraping source URL (disabled unless explicitly enabled)
+EXPIRED_DOMAINS_URL=
+ALLOW_UNOFFICIAL_SCRAPING=false
 ```
 
 ### 4. Run the bot
