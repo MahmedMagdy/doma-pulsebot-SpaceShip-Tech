@@ -460,10 +460,7 @@ class AtomClient:
             self.cfg.max_backoff_seconds,
             self.cfg.retry_base_seconds * (2 ** (attempt - 1)),
         )
-        return random.uniform(
-            MIN_RETRY_BASE_SECONDS,
-            max(capped_exponential, MIN_RETRY_BASE_SECONDS),
-        )
+        return random.uniform(0.0, max(capped_exponential, MIN_RETRY_BASE_SECONDS))
 
     async def _request_json_with_retry(
         self,
@@ -504,13 +501,18 @@ class AtomClient:
                         self._note_rate_limit()
                         self._note_retryable_failure()
                         wait_seconds = self._backoff_seconds(attempt)
-                        LOGGER.warning("%s rate-limited (429); retrying in %.2fs", context_label, wait_seconds)
+                        LOGGER.warning(
+                            "%s rate-limited (429) on %s; retrying in %.2fs",
+                            context_label,
+                            url,
+                            wait_seconds,
+                        )
                         await asyncio.sleep(wait_seconds)
                         continue
                     if 500 <= response.status < 600:
                         self._note_retryable_failure()
                         wait_seconds = self._backoff_seconds(attempt)
-                        LOGGER.info(
+                        LOGGER.warning(
                             "%s upstream status=%s; retrying in %.2fs",
                             context_label,
                             response.status,
@@ -946,14 +948,14 @@ async def watch_events(app: Application, chat_id: int) -> None:
                 if not opportunities:
                     LOGGER.info("No partnership opportunities found this cycle.")
 
-                queue: list[tuple[float, str, DomainOpportunity]] = []
+                priority_heap: list[tuple[float, str, DomainOpportunity]] = []
                 for opportunity in opportunities:
                     if opportunity.tld not in cfg.allowed_tlds:
                         continue
                     if store.has_alerted(opportunity.domain):
                         continue
                     heapq.heappush(
-                        queue,
+                        priority_heap,
                         (
                             -priority_score(opportunity, cfg),
                             opportunity.domain,
@@ -961,9 +963,9 @@ async def watch_events(app: Application, chat_id: int) -> None:
                         ),
                     )
 
-                evaluations_left = min(len(queue), cfg.max_domains_per_cycle)
-                while queue and evaluations_left > 0:
-                    _, _, opportunity = heapq.heappop(queue)
+                evaluations_left = min(len(priority_heap), cfg.max_domains_per_cycle)
+                while priority_heap and evaluations_left > 0:
+                    _, _, opportunity = heapq.heappop(priority_heap)
                     evaluations_left -= 1
 
                     try:
