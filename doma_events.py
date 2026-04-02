@@ -15,6 +15,13 @@ from telegram.ext import Application
 
 LOGGER = logging.getLogger(__name__)
 SPECIAL_CHARS = r"_*[]()~`>#+-=|{}.!"
+MIN_POLL_SECONDS = 1
+MIN_RETRY_ATTEMPTS = 1
+MIN_RETRY_BASE_SECONDS = 0.2
+MIN_BACKOFF_SECONDS = 1.0
+MIN_QUOTA_COOLDOWN_SECONDS = 30
+JITTER_MIN_SECONDS = 0.15
+JITTER_MAX_SECONDS = 0.85
 APPRAISAL_FALLBACK_TOKENS = (
     "out of credits",
     "rate limit exceeded",
@@ -140,10 +147,10 @@ class WatcherConfig:
             request_timeout_seconds=int(os.getenv("HTTP_TIMEOUT_SECONDS", "20")),
             db_path=os.getenv("ALERT_DB_PATH", "alerts.db"),
             max_domains_per_cycle=int(os.getenv("MAX_DOMAINS_PER_CYCLE", "200")),
-            max_retry_attempts=max(1, int(os.getenv("MAX_RETRY_ATTEMPTS", "4"))),
-            retry_base_seconds=max(0.2, float(os.getenv("RETRY_BASE_SECONDS", "1.2"))),
-            max_backoff_seconds=max(1.0, float(os.getenv("MAX_BACKOFF_SECONDS", "45"))),
-            quota_cooldown_seconds=max(30, int(os.getenv("QUOTA_COOLDOWN_SECONDS", "180"))),
+            max_retry_attempts=max(MIN_RETRY_ATTEMPTS, int(os.getenv("MAX_RETRY_ATTEMPTS", "4"))),
+            retry_base_seconds=max(MIN_RETRY_BASE_SECONDS, float(os.getenv("RETRY_BASE_SECONDS", "1.2"))),
+            max_backoff_seconds=max(MIN_BACKOFF_SECONDS, float(os.getenv("MAX_BACKOFF_SECONDS", "45"))),
+            quota_cooldown_seconds=max(MIN_QUOTA_COOLDOWN_SECONDS, int(os.getenv("QUOTA_COOLDOWN_SECONDS", "180"))),
             min_margin_usd=float(os.getenv("ARBITRAGE_MIN_GAP_USD", "20")),
             min_margin_ratio=float(os.getenv("ARBITRAGE_MIN_RATIO", "1.8")),
             allowed_tlds=allowed_tlds or {".dev", ".app", ".cloud"},
@@ -181,7 +188,7 @@ def parse_turbo_hours(raw_value: str) -> tuple[tuple[int, int], ...]:
             end = int(end_s)
         except ValueError:
             continue
-        if 0 <= start <= 23 and 1 <= end <= 24 and start != end:
+        if 0 <= start <= 23 and 0 <= end <= 23 and start != end:
             ranges.append((start, end))
     return tuple(ranges) if ranges else ((18, 21),)
 
@@ -198,7 +205,7 @@ def is_turbo_hour(now_utc: datetime, cfg: WatcherConfig) -> bool:
 
 def current_poll_seconds(now_utc: datetime, cfg: WatcherConfig) -> int:
     if is_turbo_hour(now_utc, cfg):
-        return max(1, cfg.turbo_poll_seconds)
+        return max(MIN_POLL_SECONDS, cfg.turbo_poll_seconds)
     if cfg.eco_poll_seconds > 0:
         return cfg.eco_poll_seconds
     return cfg.poll_seconds
@@ -383,7 +390,7 @@ class AtomClient:
 
     def _backoff_seconds(self, attempt: int) -> float:
         exponential = self.cfg.retry_base_seconds * (2 ** (attempt - 1))
-        jitter = random.uniform(0.15, 0.85)
+        jitter = random.uniform(JITTER_MIN_SECONDS, JITTER_MAX_SECONDS)
         return min(self.cfg.max_backoff_seconds, exponential + jitter)
 
     async def _request_json_with_retry(
