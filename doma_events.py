@@ -90,6 +90,8 @@ class WatcherConfig:
     atom_user_id: str = ""
     atom_appraisal_url: str = ""
     atom_appraisal_key: str = ""
+    atom_trademark_url: str = ""
+    atom_trademark_key: str = ""
     proxy_url: str = ""
     human_delay_min_seconds: float = 0.8
     human_delay_max_seconds: float = 2.5
@@ -108,6 +110,7 @@ class WatcherConfig:
         delay_max = max(human_delay_min, human_delay_max)
         partnership_url = os.getenv("ATOM_PARTNERSHIP_API_URL", "").strip()
         appraisal_url = os.getenv("ATOM_APPRAISAL_API_URL", "").strip()
+        trademark_url = os.getenv("ATOM_TRADEMARK_API_URL", "").strip()
         return cls(
             poll_seconds=int(os.getenv("WATCHER_POLL_SECONDS", "30")),
             eco_poll_seconds=int(os.getenv("ECO_POLL_SECONDS", "120")),
@@ -137,6 +140,8 @@ class WatcherConfig:
             atom_user_id=os.getenv("ATOM_USER_ID", "").strip(),
             atom_appraisal_url=appraisal_url,
             atom_appraisal_key=os.getenv("ATOM_APPRAISAL_KEY", "").strip(),
+            atom_trademark_url=trademark_url,
+            atom_trademark_key=os.getenv("ATOM_TRADEMARK_KEY", "").strip(),
             proxy_url=os.getenv("PROXY_URL", "").strip(),
             human_delay_min_seconds=delay_min,
             human_delay_max_seconds=delay_max,
@@ -226,12 +231,8 @@ def validate_required_atom_config(cfg: WatcherConfig) -> None:
     missing: list[str] = []
     if not cfg.atom_partnership_url:
         missing.append("ATOM_PARTNERSHIP_API_URL")
-    if not cfg.atom_appraisal_url:
-        missing.append("ATOM_APPRAISAL_API_URL")
     if not cfg.atom_api_key:
         missing.append("ATOM_API_KEY")
-    if not cfg.atom_appraisal_key:
-        missing.append("ATOM_APPRAISAL_KEY")
     if not cfg.atom_user_id:
         missing.append("ATOM_USER_ID")
     if missing:
@@ -282,6 +283,11 @@ def extract_error_message(data: dict[str, Any]) -> Optional[str]:
         ).strip()
         or None
     )
+
+
+def is_quota_exhaustion_error(exc: Exception) -> bool:
+    message = str(exc)
+    return "status=429" in message or "status=403" in message
 
 
 def extract_rows(payload: Any) -> list[dict[str, Any]]:
@@ -373,8 +379,7 @@ class AtomClient:
         self.cfg = cfg
         self._partnership_url = cfg.atom_partnership_url
         self._quota_backoff_until_monotonic = 0.0
-        self._circuit_open_until_monotonic = 0.0
-        self._circuit_failures = 0
+        self._logged_trademark_config_warning = False
 
     def _headers(self, api_key: str) -> dict[str, str]:
         headers = {"Accept": "application/json"}
@@ -663,26 +668,89 @@ class AtomClient:
 
         return float(value)
 
+    async def passes_trademark_filter(self, domain: str) -> bool:
+        if not self.cfg.atom_trademark_url:
+            if not self._logged_trademark_config_warning:
+                LOGGER.warning("Trademark API URL not configured - bypassing trademark filter")
+                self._logged_trademark_config_warning = True
+            return True
+
+        payload = {"domain": domain}
+        try:
+            data = await self._request_json_with_retry(
+                "POST",
+                self.cfg.atom_trademark_url,
+                headers=self._headers(self.cfg.atom_trademark_key),
+                json_payload=payload,
+                context_label="Trademark API",
+            )
+        except Exception as exc:
+            if is_quota_exhaustion_error(exc):
+                LOGGER.warning("Trademark quota exhausted - bypassing filter for %s", domain)
+            else:
+                LOGGER.warning("Trademark filter failed for %s - bypassing filter: %s", domain, exc)
+            return True
+
+        if data is None:
+            return True
+
+        if isinstance(data, dict):
+            blocked = data.get("blocked")
+            if isinstance(blocked, bool):
+                return not blocked
+
+            is_clear = data.get("is_clear")
+            if isinstance(is_clear, bool):
+                return is_clear
+
+            conflict = data.get("has_conflict")
+            if isinstance(conflict, bool):
+                return not conflict
+
+            status_text = str(
+                data.get("status")
+                or data.get("result")
+                or data.get("decision")
+                or data.get("trademark_status")
+                or ""
+            ).strip().lower()
+            if status_text in {"clear", "approved", "pass", "ok", "safe"}:
+                return True
+            if status_text in {"blocked", "deny", "denied", "fail", "conflict", "infringing"}:
+                return False
+
+        return True
+
 async def evaluate_opportunity(
     client: AtomClient,
     opportunity: DomainOpportunity,
     cfg: WatcherConfig,
 ) -> ValuationResult:
+    method = "atom_ai"
+    reason = "Atom Appraisal API"
     try:
         ai_value = await client.appraise_with_atom_ai(opportunity.domain)
-        method = "atom_ai"
-        reason = "Atom Appraisal API"
         estimated = ai_value
         LOGGER.info("Valuation method=AI domain=%s estimated=$%.2f", opportunity.domain, estimated)
     except AppraisalUnavailableError as exc:
-        raise AppraisalUnavailableError(
-            "Atom appraisal required for scoring. Ensure ATOM_APPRAISAL_API_URL and "
-            f"ATOM_APPRAISAL_KEY are configured and valid. Details: {exc}"
-        ) from exc
+        if is_quota_exhaustion_error(exc):
+            LOGGER.warning("Appraisal quota exhausted - bypassing filter for %s", opportunity.domain)
+        else:
+            LOGGER.warning("Appraisal failed for %s - bypassing filter: %s", opportunity.domain, exc)
+        estimated = opportunity.ask_price_usd
+        method = "bypass_no_appraisal"
+        reason = "Appraisal unavailable; bypassed for fault tolerance"
+    except Exception as exc:
+        LOGGER.warning("Appraisal unexpected error for %s - bypassing filter: %s", opportunity.domain, exc)
+        estimated = opportunity.ask_price_usd
+        method = "bypass_no_appraisal"
+        reason = "Appraisal unavailable; bypassed for fault tolerance"
 
     margin_usd = estimated - opportunity.ask_price_usd
     ratio = estimated / opportunity.ask_price_usd if opportunity.ask_price_usd > 0 else 0.0
-    is_high_margin = margin_usd >= cfg.min_margin_usd and ratio >= cfg.min_margin_ratio
+    is_high_margin = method == "bypass_no_appraisal" or (
+        margin_usd >= cfg.min_margin_usd and ratio >= cfg.min_margin_ratio
+    )
 
     return ValuationResult(
         estimated_value_usd=round(estimated, 2),
@@ -744,13 +812,14 @@ async def watch_events(app: Application, chat_id: int) -> None:
     timeout = aiohttp.ClientTimeout(total=cfg.request_timeout_seconds)
 
     LOGGER.info(
-        "Starting Atom watcher (default_poll=%ss, eco=%ss, turbo=%ss, turbo_hours=%s, partnership=%s, appraisal=%s, user_id=%s, proxy=%s, delay=%.2f-%.2fs)",
+        "Starting Atom watcher (default_poll=%ss, eco=%ss, turbo=%ss, turbo_hours=%s, partnership=%s, appraisal=%s, trademark=%s, user_id=%s, proxy=%s, delay=%.2f-%.2fs)",
         cfg.poll_seconds,
         cfg.eco_poll_seconds,
         cfg.turbo_poll_seconds,
         cfg.turbo_hours_utc,
         bool(cfg.atom_partnership_url),
         bool(cfg.atom_appraisal_url),
+        bool(cfg.atom_trademark_url),
         bool(cfg.atom_user_id),
         bool(cfg.proxy_url),
         cfg.human_delay_min_seconds,
@@ -803,6 +872,19 @@ async def watch_events(app: Application, chat_id: int) -> None:
                         continue
 
                     if not valuation.is_high_margin:
+                        continue
+
+                    try:
+                        passes_trademark = await client.passes_trademark_filter(opportunity.domain)
+                    except Exception as exc:
+                        LOGGER.warning(
+                            "Trademark filter error for %s - bypassing filter: %s",
+                            opportunity.domain,
+                            exc,
+                        )
+                        passes_trademark = True
+                    if not passes_trademark:
+                        LOGGER.info("Trademark filter blocked domain=%s", opportunity.domain)
                         continue
 
                     try:
