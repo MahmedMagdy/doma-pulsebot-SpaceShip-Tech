@@ -65,7 +65,8 @@ def get_chat_filters(store: dict[str, Any], chat_id: int) -> dict[str, Any]:
     merged.update(raw)
 
     raw_tlds = merged.get("tlds") if isinstance(merged.get("tlds"), list) else []
-    merged["tlds"] = [t for t in raw_tlds if isinstance(t, str) and t in TLD_OPTIONS]
+    tld_set = {t for t in raw_tlds if isinstance(t, str) and t in TLD_OPTIONS}
+    merged["tlds"] = [t for t in TLD_OPTIONS if t in tld_set]
     merged["keywords"] = [
         kw for kw in (merged.get("keywords") if isinstance(merged.get("keywords"), list) else [])
         if isinstance(kw, str) and kw in KEYWORD_OPTIONS
@@ -162,6 +163,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👋 Welcome to Doma PulseBot!\n\n"
         f"Your pro domain command center is live.\n"
+        f"I'll notify you about high-margin domain arbitrage opportunities.\n"
         f"📡 Registered Chat ID: `{chat_id}`\n\n"
         f"Commands:\n"
         f"/filter - Pro filter menu\n"
@@ -260,13 +262,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 selected.add(tld)
             filters["tlds"] = [value for value in TLD_OPTIONS if value in selected]
     elif action == "maxp" and len(parts) == 3:
-        value = int(parts[2])
+        try:
+            value = int(parts[2])
+        except ValueError:
+            value = 0
         filters["max_price"] = value if value > 0 else None
     elif action == "mina" and len(parts) == 3:
-        value = int(parts[2])
+        try:
+            value = int(parts[2])
+        except ValueError:
+            value = 0
         filters["min_appraisal"] = value if value > 0 else None
     elif action == "maxl" and len(parts) == 3:
-        value = int(parts[2])
+        try:
+            value = int(parts[2])
+        except ValueError:
+            value = 0
         filters["max_length"] = value if value > 0 else None
     elif action == "kw" and len(parts) == 3:
         keyword = parts[2].lower()

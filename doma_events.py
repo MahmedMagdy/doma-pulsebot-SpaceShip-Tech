@@ -798,13 +798,11 @@ async def emit_alert(
 ) -> None:
     atom_base = cfg.atom_domain_base_url.rstrip("/")
     atom_buy_url = f"{atom_base}/{opportunity.domain}"
-    keyboard = InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("🛒 Buy on Atom", url=atom_buy_url)],
-            [InlineKeyboardButton("🔗 Open Listing", url=opportunity.listing_url)],
-            [InlineKeyboardButton("📊 Whois", url=opportunity.whois_url)],
-        ]
-    )
+    rows = [[InlineKeyboardButton("🛒 Buy on Atom", url=atom_buy_url)]]
+    if opportunity.listing_url.rstrip("/") != atom_buy_url.rstrip("/"):
+        rows.append([InlineKeyboardButton("🔗 Open Listing", url=opportunity.listing_url)])
+    rows.append([InlineKeyboardButton("📊 Whois", url=opportunity.whois_url)])
+    keyboard = InlineKeyboardMarkup(rows)
     await app.bot.send_message(
         chat_id=chat_id,
         text=format_alert(opportunity, valuation),
@@ -924,8 +922,6 @@ async def watch_events(app: Application, chat_id: int) -> None:
 
                 priority_heap: list[tuple[float, str, DomainOpportunity]] = []
                 for opportunity in opportunities:
-                    if opportunity.tld not in cfg.allowed_tlds:
-                        continue
                     heapq.heappush(
                         priority_heap,
                         (
