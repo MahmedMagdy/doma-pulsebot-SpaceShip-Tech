@@ -29,6 +29,10 @@ class RetryableAPIError(Exception):
         self.retry_after_seconds = retry_after_seconds
 
 
+class EndpointNotFoundError(RuntimeError):
+    pass
+
+
 def parse_retry_after_seconds(value: Optional[str]) -> Optional[float]:
     if not value:
         return None
@@ -73,7 +77,7 @@ async def with_exponential_backoff(
                 if isinstance(exc, RetryableAPIError)
                 else None
             )
-            exponential = min(cap_delay_seconds, base_delay_seconds * (2**attempt))
+            exponential = min(cap_delay_seconds, base_delay_seconds * (2 ** (attempt + 1)))
             jitter = random.uniform(0, base_delay_seconds)
             delay = max(exponential + jitter, retry_after or 0.0)
             LOGGER.warning(
@@ -183,6 +187,11 @@ class WatcherConfig:
             for t in os.getenv("ALLOWED_TLDS", ".app,.dev,.com").split(",")
             if t.strip()
         }
+        legacy_go_candidates = os.getenv("GODADDY_CANDIDATES_PER_CYCLE", "").strip()
+        if legacy_go_candidates and not os.getenv("CANDIDATES_PER_CYCLE", "").strip():
+            LOGGER.warning(
+                "GODADDY_CANDIDATES_PER_CYCLE is deprecated; use CANDIDATES_PER_CYCLE."
+            )
         return cls(
             poll_seconds=int(os.getenv("WATCHER_POLL_SECONDS", "30")),
             allowed_tlds=tlds or {".app", ".dev", ".com"},
@@ -208,7 +217,7 @@ class WatcherConfig:
             candidates_per_cycle=int(
                 os.getenv(
                     "CANDIDATES_PER_CYCLE",
-                    os.getenv("GODADDY_CANDIDATES_PER_CYCLE", "20"),
+                    legacy_go_candidates or "20",
                 )
             ),
             per_source_concurrency=int(os.getenv("PER_SOURCE_CONCURRENCY", "10")),
@@ -287,6 +296,7 @@ class GoDaddyAvailabilitySource:
         self.base_delay_seconds = base_delay_seconds
         self.cap_delay_seconds = cap_delay_seconds
         self.per_source_concurrency = per_source_concurrency
+        self._semaphore = asyncio.Semaphore(self.per_source_concurrency)
         self.base_url = (
             "https://api.ote-godaddy.com"
             if use_ote
@@ -295,10 +305,9 @@ class GoDaddyAvailabilitySource:
 
     async def fetch(self, candidates: Sequence[str]) -> list[DomainListing]:
         headers = {"Authorization": f"sso-key {self.api_key}:{self.api_secret}"}
-        semaphore = asyncio.Semaphore(self.per_source_concurrency)
 
         async def guarded(domain: str) -> Optional[DomainListing]:
-            async with semaphore:
+            async with self._semaphore:
                 return await self._check_domain(domain, headers)
 
         tasks = [guarded(domain) for domain in candidates]
@@ -397,7 +406,7 @@ class NamecheapAvailabilitySource:
             return []
         deduped = list(dict.fromkeys(candidates))
         chunks = [
-            deduped[idx: idx + self.batch_check_size]
+            deduped[idx : idx + self.batch_check_size]
             for idx in range(0, len(deduped), self.batch_check_size)
         ]
         tasks = [self._check_batch(batch) for batch in chunks if batch]
@@ -510,7 +519,7 @@ class NameComAvailabilitySource:
             return []
         deduped = list(dict.fromkeys(candidates))
         chunks = [
-            deduped[idx: idx + self.batch_check_size]
+            deduped[idx : idx + self.batch_check_size]
             for idx in range(0, len(deduped), self.batch_check_size)
         ]
         tasks = [self._check_batch(batch) for batch in chunks if batch]
@@ -540,7 +549,7 @@ class NameComAvailabilitySource:
                 json=payload,
             ) as response:
                 if response.status == 404:
-                    raise FileNotFoundError(endpoint)
+                    raise EndpointNotFoundError(endpoint)
                 if response.status == 429:
                     raise RetryableAPIError(
                         "Name.com rate limited",
@@ -612,10 +621,17 @@ class NameComAvailabilitySource:
                     cap_delay_seconds=self.cap_delay_seconds,
                     max_retries=self.max_retries,
                 )
-            except FileNotFoundError as exc:
+            except EndpointNotFoundError as exc:
                 last_error = exc
                 continue
-            except Exception as exc:  # noqa: BLE001
+            except (
+                RetryableAPIError,
+                aiohttp.ClientError,
+                asyncio.TimeoutError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+            ) as exc:
                 last_error = exc
                 break
 
