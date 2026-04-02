@@ -63,9 +63,16 @@ class ValuationResult:
 @dataclass
 class WatcherConfig:
     poll_seconds: int = 30
+    eco_poll_seconds: int = 120
+    turbo_poll_seconds: int = 8
+    turbo_hours_utc: tuple[tuple[int, int], ...] = ((18, 21),)
     request_timeout_seconds: int = 20
     db_path: str = "alerts.db"
     max_domains_per_cycle: int = 200
+    max_retry_attempts: int = 4
+    retry_base_seconds: float = 1.2
+    max_backoff_seconds: float = 45.0
+    quota_cooldown_seconds: int = 180
     min_margin_usd: float = 20.0
     min_margin_ratio: float = 1.8
     allowed_tlds: set[str] = field(default_factory=lambda: {".dev", ".app", ".cloud"})
@@ -116,16 +123,32 @@ class WatcherConfig:
         human_delay_max = float(os.getenv("HUMAN_DELAY_MAX_SECONDS", "2.5"))
         delay_min = min(human_delay_min, human_delay_max)
         delay_max = max(human_delay_min, human_delay_max)
+        partnership_urls_raw = os.getenv("ATOM_PARTNERSHIP_API_URLS", "").strip()
+        partnership_urls = tuple(
+            part.strip()
+            for part in partnership_urls_raw.split(",")
+            if part.strip()
+        )
+        if not partnership_urls:
+            single_url = os.getenv("ATOM_PARTNERSHIP_API_URL", "").strip()
+            partnership_urls = (single_url,) if single_url else tuple()
         return cls(
             poll_seconds=int(os.getenv("WATCHER_POLL_SECONDS", "30")),
+            eco_poll_seconds=int(os.getenv("ECO_POLL_SECONDS", "120")),
+            turbo_poll_seconds=int(os.getenv("TURBO_POLL_SECONDS", "8")),
+            turbo_hours_utc=parse_turbo_hours(os.getenv("TURBO_HOURS_UTC", "18-21")),
             request_timeout_seconds=int(os.getenv("HTTP_TIMEOUT_SECONDS", "20")),
             db_path=os.getenv("ALERT_DB_PATH", "alerts.db"),
             max_domains_per_cycle=int(os.getenv("MAX_DOMAINS_PER_CYCLE", "200")),
+            max_retry_attempts=max(1, int(os.getenv("MAX_RETRY_ATTEMPTS", "4"))),
+            retry_base_seconds=max(0.2, float(os.getenv("RETRY_BASE_SECONDS", "1.2"))),
+            max_backoff_seconds=max(1.0, float(os.getenv("MAX_BACKOFF_SECONDS", "45"))),
+            quota_cooldown_seconds=max(30, int(os.getenv("QUOTA_COOLDOWN_SECONDS", "180"))),
             min_margin_usd=float(os.getenv("ARBITRAGE_MIN_GAP_USD", "20")),
             min_margin_ratio=float(os.getenv("ARBITRAGE_MIN_RATIO", "1.8")),
             allowed_tlds=allowed_tlds or {".dev", ".app", ".cloud"},
             keyword_value_usd=float(os.getenv("KEYWORD_VALUE_USD", "22")),
-            atom_partnership_url=os.getenv("ATOM_PARTNERSHIP_API_URL", "").strip(),
+            atom_partnership_url=partnership_urls[0] if partnership_urls else "",
             atom_partnership_api_key=os.getenv("ATOM_PARTNERSHIP_API_KEY", "").strip(),
             atom_appraisal_url=os.getenv("ATOM_APPRAISAL_API_URL", "").strip(),
             atom_appraisal_api_key=os.getenv("ATOM_APPRAISAL_API_KEY", "").strip(),
@@ -142,6 +165,43 @@ class WatcherConfig:
             search_volume_bonus_points=float(os.getenv("SEARCH_VOL_BONUS_POINTS", "10")),
             historical_sales_bonus_points=float(os.getenv("NAMEBIO_BONUS_POINTS", "15")),
         )
+
+
+def parse_turbo_hours(raw_value: str) -> tuple[tuple[int, int], ...]:
+    ranges: list[tuple[int, int]] = []
+    for part in raw_value.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if "-" not in token:
+            continue
+        start_s, end_s = token.split("-", 1)
+        try:
+            start = int(start_s)
+            end = int(end_s)
+        except ValueError:
+            continue
+        if 0 <= start <= 23 and 1 <= end <= 24 and start != end:
+            ranges.append((start, end))
+    return tuple(ranges) if ranges else ((18, 21),)
+
+
+def is_turbo_hour(now_utc: datetime, cfg: WatcherConfig) -> bool:
+    hour = now_utc.hour
+    for start, end in cfg.turbo_hours_utc:
+        if start < end and start <= hour < end:
+            return True
+        if start > end and (hour >= start or hour < end):
+            return True
+    return False
+
+
+def current_poll_seconds(now_utc: datetime, cfg: WatcherConfig) -> int:
+    if is_turbo_hour(now_utc, cfg):
+        return max(1, cfg.turbo_poll_seconds)
+    if cfg.eco_poll_seconds > 0:
+        return cfg.eco_poll_seconds
+    return cfg.poll_seconds
 
 
 class AlertStore:
@@ -280,6 +340,12 @@ class AtomClient:
     def __init__(self, session: aiohttp.ClientSession, cfg: WatcherConfig) -> None:
         self.session = session
         self.cfg = cfg
+        self._partnership_urls = self._normalize_urls(
+            os.getenv("ATOM_PARTNERSHIP_API_URLS", ""),
+            cfg.atom_partnership_url,
+        )
+        self._round_robin_index = 0
+        self._quota_backoff_until_monotonic = 0.0
 
     def _headers(self, api_key: str) -> dict[str, str]:
         headers = {"Accept": "application/json"}
@@ -296,26 +362,128 @@ class AtomClient:
             )
         )
 
+    @staticmethod
+    def _normalize_urls(raw_urls: str, fallback_url: str) -> tuple[str, ...]:
+        urls = tuple(url.strip() for url in raw_urls.split(",") if url.strip())
+        if urls:
+            return urls
+        return (fallback_url,) if fallback_url else tuple()
+
+    def _note_rate_limit(self) -> None:
+        loop = asyncio.get_running_loop()
+        self._quota_backoff_until_monotonic = max(
+            self._quota_backoff_until_monotonic,
+            loop.time() + self.cfg.quota_cooldown_seconds,
+        )
+
+    def quota_backoff_remaining_seconds(self) -> int:
+        loop = asyncio.get_running_loop()
+        remaining = self._quota_backoff_until_monotonic - loop.time()
+        return max(0, int(remaining))
+
+    def _backoff_seconds(self, attempt: int) -> float:
+        exponential = self.cfg.retry_base_seconds * (2 ** (attempt - 1))
+        jitter = random.uniform(0.15, 0.85)
+        return min(self.cfg.max_backoff_seconds, exponential + jitter)
+
+    async def _request_json_with_retry(
+        self,
+        method: str,
+        urls: tuple[str, ...],
+        *,
+        headers: Optional[dict[str, str]] = None,
+        params: Optional[dict[str, Any]] = None,
+        json_payload: Optional[dict[str, Any]] = None,
+        context_label: str,
+        suppress_on_4xx: bool = False,
+    ) -> Optional[Any]:
+        if not urls:
+            return None
+
+        last_error: Optional[str] = None
+        for attempt in range(1, self.cfg.max_retry_attempts + 1):
+            url_index = (self._round_robin_index + (attempt - 1)) % len(urls)
+            url = urls[url_index]
+            await self._humanized_delay()
+            try:
+                async with self.session.request(
+                    method,
+                    url,
+                    headers=headers,
+                    params=params,
+                    json=json_payload,
+                    proxy=self.cfg.proxy_url or None,
+                ) as response:
+                    body = await response.text()
+                    if response.status == 429:
+                        self._note_rate_limit()
+                        wait_seconds = self._backoff_seconds(attempt)
+                        LOGGER.warning(
+                            "%s rate-limited (429) on %s; retrying in %.2fs",
+                            context_label,
+                            url,
+                            wait_seconds,
+                        )
+                        await asyncio.sleep(wait_seconds)
+                        continue
+                    if 500 <= response.status < 600:
+                        wait_seconds = self._backoff_seconds(attempt)
+                        LOGGER.warning(
+                            "%s upstream error status=%s on %s; retrying in %.2fs",
+                            context_label,
+                            response.status,
+                            url,
+                            wait_seconds,
+                        )
+                        await asyncio.sleep(wait_seconds)
+                        continue
+                    if response.status != 200:
+                        if suppress_on_4xx and 400 <= response.status < 500:
+                            LOGGER.debug(
+                                "%s skipped status=%s on %s body=%s",
+                                context_label,
+                                response.status,
+                                url,
+                                body[:240],
+                            )
+                            return None
+                        raise RuntimeError(
+                            f"{context_label} failed status={response.status} body={body[:300]}"
+                        )
+                    self._round_robin_index = (url_index + 1) % len(urls)
+                    try:
+                        return await response.json(content_type=None)
+                    except Exception as exc:
+                        raise RuntimeError(f"{context_label} returned invalid JSON: {exc}") from exc
+            except aiohttp.ClientError as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                wait_seconds = self._backoff_seconds(attempt)
+                LOGGER.warning(
+                    "%s network error on %s: %s; retrying in %.2fs",
+                    context_label,
+                    url,
+                    exc,
+                    wait_seconds,
+                )
+                await asyncio.sleep(wait_seconds)
+
+        if last_error:
+            raise RuntimeError(f"{context_label} failed after retries: {last_error}")
+        raise RuntimeError(f"{context_label} failed after retries")
+
     async def fetch_partnership_domains(self) -> list[DomainOpportunity]:
-        if not self.cfg.atom_partnership_url:
-            LOGGER.warning("ATOM_PARTNERSHIP_API_URL is not set; no domains fetched.")
+        if not self._partnership_urls:
+            LOGGER.warning("ATOM_PARTNERSHIP_API_URL(S) is not set; no domains fetched.")
             return []
 
-        await self._humanized_delay()
-        async with self.session.get(
-            self.cfg.atom_partnership_url,
+        payload = await self._request_json_with_retry(
+            "GET",
+            self._partnership_urls,
             headers=self._headers(self.cfg.atom_partnership_api_key),
-            proxy=self.cfg.proxy_url or None,
-        ) as response:
-            body = await response.text()
-            if response.status != 200:
-                raise RuntimeError(
-                    f"Partnership API error status={response.status} body={body[:300]}"
-                )
-            try:
-                payload = await response.json(content_type=None)
-            except Exception as exc:
-                raise RuntimeError(f"Partnership API returned invalid JSON: {exc}") from exc
+            context_label="Partnership API",
+        )
+        if payload is None:
+            return []
 
         rows = extract_rows(payload)
         opportunities: list[DomainOpportunity] = []
@@ -370,32 +538,66 @@ class AtomClient:
             raise AppraisalUnavailableError("ATOM_APPRAISAL_API_URL is not set")
 
         payload = {"domain": domain}
-        await self._humanized_delay()
-        async with self.session.post(
-            self.cfg.atom_appraisal_url,
-            headers=self._headers(self.cfg.atom_appraisal_api_key),
-            json=payload,
-            proxy=self.cfg.proxy_url or None,
-        ) as response:
-            body_text = await response.text()
-            lowered = body_text.lower()
-
-            if response.status != 200:
-                if any(
-                    token in lowered
-                    for token in APPRAISAL_FALLBACK_TOKENS
-                ) or response.status in {402, 403, 429}:
-                    raise AppraisalUnavailableError(
-                        f"AI appraisal unavailable (status={response.status}): {body_text[:240]}"
-                    )
-                raise AppraisalUnavailableError(
-                    f"AI appraisal error status={response.status}: {body_text[:240]}"
-                )
-
+        for attempt in range(1, self.cfg.max_retry_attempts + 1):
+            await self._humanized_delay()
             try:
-                data = await response.json(content_type=None)
-            except Exception as exc:
-                raise AppraisalUnavailableError(f"AI appraisal returned invalid JSON: {exc}") from exc
+                async with self.session.post(
+                    self.cfg.atom_appraisal_url,
+                    headers=self._headers(self.cfg.atom_appraisal_api_key),
+                    json=payload,
+                    proxy=self.cfg.proxy_url or None,
+                ) as response:
+                    body_text = await response.text()
+                    lowered = body_text.lower()
+
+                    if response.status == 429:
+                        self._note_rate_limit()
+                        wait_seconds = self._backoff_seconds(attempt)
+                        LOGGER.warning(
+                            "Appraisal API rate-limited (429) for %s; retrying in %.2fs",
+                            domain,
+                            wait_seconds,
+                        )
+                        await asyncio.sleep(wait_seconds)
+                        continue
+
+                    if response.status != 200:
+                        if any(token in lowered for token in APPRAISAL_FALLBACK_TOKENS) or response.status in {402, 403}:
+                            raise AppraisalUnavailableError(
+                                f"AI appraisal unavailable (status={response.status}): {body_text[:240]}"
+                            )
+                        if 500 <= response.status < 600:
+                            wait_seconds = self._backoff_seconds(attempt)
+                            LOGGER.warning(
+                                "Appraisal API error status=%s for %s; retrying in %.2fs",
+                                response.status,
+                                domain,
+                                wait_seconds,
+                            )
+                            await asyncio.sleep(wait_seconds)
+                            continue
+                        raise AppraisalUnavailableError(
+                            f"AI appraisal error status={response.status}: {body_text[:240]}"
+                        )
+
+                    try:
+                        data = await response.json(content_type=None)
+                        break
+                    except Exception as exc:
+                        raise AppraisalUnavailableError(
+                            f"AI appraisal returned invalid JSON: {exc}"
+                        ) from exc
+            except aiohttp.ClientError as exc:
+                wait_seconds = self._backoff_seconds(attempt)
+                LOGGER.warning(
+                    "Appraisal API network error for %s: %s; retrying in %.2fs",
+                    domain,
+                    exc,
+                    wait_seconds,
+                )
+                await asyncio.sleep(wait_seconds)
+        else:
+            raise AppraisalUnavailableError("AI appraisal retries exhausted")
 
         value = None
         if isinstance(data, dict):
@@ -427,23 +629,19 @@ class AtomClient:
             return 0.0, "skipped_no_url"
 
         try:
-            await self._humanized_delay()
-            async with self.session.get(
-                self.cfg.seo_api_url,
+            data = await self._request_json_with_retry(
+                "GET",
+                (self.cfg.seo_api_url,),
                 headers=self._headers(self.cfg.seo_api_key),
                 params={"domain": domain},
-                proxy=self.cfg.proxy_url or None,
-            ) as response:
-                if response.status != 200:
-                    LOGGER.debug(
-                        "Skipping SEO / Backlinks Check - API status=%s",
-                        response.status,
-                    )
-                    return 0.0, f"status_{response.status}"
-                data = await response.json(content_type=None)
+                context_label="SEO API",
+                suppress_on_4xx=True,
+            )
         except Exception as exc:
             LOGGER.debug("Skipping SEO / Backlinks Check - %s", exc)
             return 0.0, "request_failed"
+        if data is None:
+            return 0.0, "skipped_4xx"
         if not isinstance(data, dict):
             return 0.0, "invalid_payload"
 
@@ -464,23 +662,19 @@ class AtomClient:
 
         keyword = domain.split(".", 1)[0]
         try:
-            await self._humanized_delay()
-            async with self.session.get(
-                self.cfg.search_volume_api_url,
+            data = await self._request_json_with_retry(
+                "GET",
+                (self.cfg.search_volume_api_url,),
                 headers=self._headers(self.cfg.search_volume_api_key),
                 params={"keyword": keyword},
-                proxy=self.cfg.proxy_url or None,
-            ) as response:
-                if response.status != 200:
-                    LOGGER.debug(
-                        "Skipping Search Volume Check - API status=%s",
-                        response.status,
-                    )
-                    return 0.0, f"status_{response.status}"
-                data = await response.json(content_type=None)
+                context_label="Search Volume API",
+                suppress_on_4xx=True,
+            )
         except Exception as exc:
             LOGGER.debug("Skipping Search Volume Check - %s", exc)
             return 0.0, "request_failed"
+        if data is None:
+            return 0.0, "skipped_4xx"
         if not isinstance(data, dict):
             return 0.0, "invalid_payload"
 
@@ -502,23 +696,19 @@ class AtomClient:
 
         keyword = domain.split(".", 1)[0]
         try:
-            await self._humanized_delay()
-            async with self.session.get(
-                self.cfg.namebio_api_url,
+            data = await self._request_json_with_retry(
+                "GET",
+                (self.cfg.namebio_api_url,),
                 headers=self._headers(self.cfg.namebio_api_key),
                 params={"keyword": keyword},
-                proxy=self.cfg.proxy_url or None,
-            ) as response:
-                if response.status != 200:
-                    LOGGER.debug(
-                        "Skipping Historical Sales Check - API status=%s",
-                        response.status,
-                    )
-                    return 0.0, f"status_{response.status}"
-                data = await response.json(content_type=None)
+                context_label="Historical Sales API",
+                suppress_on_4xx=True,
+            )
         except Exception as exc:
             LOGGER.debug("Skipping Historical Sales Check - %s", exc)
             return 0.0, "request_failed"
+        if data is None:
+            return 0.0, "skipped_4xx"
 
         if not isinstance(data, dict):
             return 0.0, "invalid_payload"
@@ -645,8 +835,11 @@ async def watch_events(app: Application, chat_id: int) -> None:
     timeout = aiohttp.ClientTimeout(total=cfg.request_timeout_seconds)
 
     LOGGER.info(
-        "Starting Atom watcher (poll=%ss, partnership=%s, appraisal=%s, proxy=%s, delay=%.2f-%.2fs)",
+        "Starting Atom watcher (default_poll=%ss, eco=%ss, turbo=%ss, turbo_hours=%s, partnership=%s, appraisal=%s, proxy=%s, delay=%.2f-%.2fs)",
         cfg.poll_seconds,
+        cfg.eco_poll_seconds,
+        cfg.turbo_poll_seconds,
+        cfg.turbo_hours_utc,
         bool(cfg.atom_partnership_url),
         bool(cfg.atom_appraisal_url),
         bool(cfg.proxy_url),
@@ -659,11 +852,15 @@ async def watch_events(app: Application, chat_id: int) -> None:
 
         try:
             while True:
+                now_utc = datetime.now(timezone.utc)
+                in_turbo = is_turbo_hour(now_utc, cfg)
+                poll_seconds = current_poll_seconds(now_utc, cfg)
                 try:
                     opportunities = await client.fetch_partnership_domains()
                 except Exception as exc:
                     LOGGER.exception("Failed to fetch partnership domains: %s", exc)
-                    await asyncio.sleep(cfg.poll_seconds)
+                    backoff_wait = max(poll_seconds, client.quota_backoff_remaining_seconds())
+                    await asyncio.sleep(backoff_wait)
                     continue
 
                 if not opportunities:
@@ -697,7 +894,16 @@ async def watch_events(app: Application, chat_id: int) -> None:
                     except Exception as exc:
                         LOGGER.exception("Failed to send Telegram alert for %s: %s", opportunity.domain, exc)
 
-                await asyncio.sleep(cfg.poll_seconds)
+                quota_wait = client.quota_backoff_remaining_seconds()
+                next_wait = max(poll_seconds, quota_wait)
+                LOGGER.info(
+                    "Cycle complete mode=%s opportunities=%s next_poll=%ss quota_wait=%ss",
+                    "turbo" if in_turbo else "eco",
+                    len(opportunities),
+                    poll_seconds,
+                    quota_wait,
+                )
+                await asyncio.sleep(next_wait)
         except asyncio.CancelledError:
             LOGGER.info("Atom watcher cancelled.")
             raise

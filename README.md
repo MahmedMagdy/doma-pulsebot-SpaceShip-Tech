@@ -1,220 +1,216 @@
+# Doma PulseBot (Production Guide)
 
-# 🤖 Doma PulseBot
+Enterprise-ready Telegram bot for high-margin domain opportunity alerts, with official API-first integration, adaptive scheduling, and anti-ban request controls.
 
-A real-time Telegram bot for **domain sale alerts on the Doma Protocol** — built for **Track 3: Bots & Event Subscriptions** of the Doma Hackathon 2025.
+## 1) Zero-to-Hero Setup (Beginner Friendly)
 
----
-
-## 🧠 What It Does
-
-**Doma PulseBot** now tracks real-world domain opportunities and sends **real-time alerts** on Telegram — with:
-
-- 🔔 Auto-updating alerts every 30 seconds  
-- 🌐 Domain name, price, source, and buy link included  
-- 🎯 Laser filters for `.app`, `.dev`, `.com` + keyword + length rules
-- 🔥 HOT DEAL scoring for near-reg premium keywords / deep discounts
-- 🧠 SQLite dedupe to avoid repeat alerts
-- 🎛 Inline action buttons for instant buy + Whois lookup
-- ✅ `/start` to subscribe  
-- 🛑 `/unsubscribe` to stop  
-- ⚙️ `/filter` to customize (expandable)  
-- 📊 `/stats` for market snapshot  
-
----
-
-## 🎯 Track: Bots & Event Subscriptions
-
-> *“Develop automated bots or subscription services for domain alerts… integrating Doma for on-chain notifications to drive user acquisition, txns, and community engagement.”*
-
-### ✅ How It Fits
-
-| Feature                  | Included |
-|--------------------------|----------|
-| Automated alerts         | ✅        |
-| Subscription system      | ✅        |
-| Telegram integration     | ✅        |
-| Doma domain events       | ✅ (simulated) |
-| Direct buy links         | ✅        |
-| Ready for on-chain API   | ✅ Easily pluggable |
-
----
-
-## 🛠 Tech Stack
-
+### Prerequisites
+- Linux/macOS terminal (or WSL on Windows)
 - Python 3.10+
-- `python-telegram-bot` v20+
-- `asyncio` background polling
-- `.env` for token security
-- Simulated domain events
+- Git
 
----
+Check versions:
 
-## 🔍 Real Data Sources (Watcher)
-
-The watcher replaces the old mock generator and supports:
-
-- **GoDaddy Availability API** (real-time availability + price checks)
-- **Namecheap Official API** (`namecheap.domains.check`)
-- **Name.com Official API** (authenticated availability checks)
-- **ExpiredDomains source URL** via optional ethical scraping (disabled by default)
-
-Both sources feed a common async pipeline with filtering, scoring, and dedupe.
-
----
-
-## 🚀 Demo Features
-
-Try these Telegram commands:
-
-- `/start` → Subscribe to alerts  
-- `/stats` → View daily stats  
-- `/filter` → (Coming soon)  
-- `/unsubscribe` → Stop alerts  
-
-Sample Alert Format:
-```
-🔥 New Domain Sale!
-🌐 Domain: matrix.core
-💰 Price: 9.02 USDC
-🔗 View on Doma: https://start.doma.xyz/market/matrix.core
-```
-
----
-
-## 📝 How to Run Locally
-
-### 1. Clone the repo
 ```bash
-git clone https://github.com/your-username/doma-pulsebot.git
+python3 --version
+git --version
+```
+
+### Step A — Clone the repository
+
+```bash
+git clone https://github.com/Eslam-tech5/doma-pulsebot.git
 cd doma-pulsebot
 ```
 
-### 2. Install dependencies
+### Step B — Create and activate virtual environment
+
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+You should now see `(.venv)` in your terminal prompt.
+
+### Step C — Install dependencies
+
+```bash
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3. Set your token in .env
-```
-TELEGRAM_TOKEN=your_bot_token
-DEFAULT_CHAT_ID=your_chat_id_here
+### Step D — Create environment file
 
-# Optional but recommended (real API source)
-GODADDY_API_KEY=your_api_key
-GODADDY_API_SECRET=your_api_secret
-# true for GoDaddy OTE sandbox, false for production API
-GODADDY_USE_OTE=false
-
-# Optional scraping source URL (you must comply with source ToS/robots.txt)
-EXPIRED_DOMAINS_URL=
-
-# Atom APIs
-ATOM_PARTNERSHIP_API_URL=
-ATOM_PARTNERSHIP_API_KEY=
-ATOM_APPRAISAL_API_URL=
-ATOM_APPRAISAL_API_KEY=
-
-# Anti-ban settings
-# Optional proxy; if unset, local machine IP is used
-PROXY_URL=
-# Always-on humanized delay range (seconds) between outbound API calls
-HUMAN_DELAY_MIN_SECONDS=0.8
-HUMAN_DELAY_MAX_SECONDS=2.5
-
-# Optional advanced valuation modules (bonus scoring)
-SEO_API_URL=
-SEO_API_KEY=
-SEARCH_VOL_API_URL=
-SEARCH_VOL_API_KEY=
-NAMEBIO_API_URL=
-NAMEBIO_API_KEY=
-SEO_BONUS_POINTS=12
-SEARCH_VOL_BONUS_POINTS=10
-NAMEBIO_BONUS_POINTS=15
-
-# Watcher filters/tuning
-ALLOWED_TLDS=.dev,.app,.cloud
-WATCHER_POLL_SECONDS=30
-HTTP_TIMEOUT_SECONDS=20
-MAX_DOMAINS_PER_CYCLE=200
-ALERT_DB_PATH=alerts.db
-
-# High-margin deal thresholds
-ARBITRAGE_MIN_GAP_USD=20
-ARBITRAGE_MIN_RATIO=1.8
-
-# Smart fallback (manual rule-based valuation)
-KEYWORD_VALUE_USD=22
+```bash
+cp .env.example .env
 ```
 
-### 4. Run the bot
+Open `.env` and fill all required values.
+
+### Step E — Run locally
+
 ```bash
 python bot.py
 ```
 
----
+## 2) Required Environment Variables
 
-## 📁 Project Structure
+Create `.env` from `.env.example` and set all values:
 
+```dotenv
+# =========================
+# Telegram
+# =========================
+TELEGRAM_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
+DEFAULT_CHAT_ID=YOUR_TELEGRAM_CHAT_ID
+
+# =========================
+# Official Domain Data Sources
+# =========================
+# Primary endpoint (single URL fallback)
+ATOM_PARTNERSHIP_API_URL=https://api.example.com/partnership/domains
+# Optional endpoint rotation (comma-separated official mirrors/endpoints)
+ATOM_PARTNERSHIP_API_URLS=https://api.example.com/partnership/domains,https://api2.example.com/partnership/domains
+ATOM_PARTNERSHIP_API_KEY=YOUR_ATOM_PARTNERSHIP_API_KEY
+
+# AI appraisal API
+ATOM_APPRAISAL_API_URL=https://api.example.com/appraisal
+ATOM_APPRAISAL_API_KEY=YOUR_ATOM_APPRAISAL_API_KEY
+
+# Optional official enrichment APIs
+SEO_API_URL=https://api.example.com/seo
+SEO_API_KEY=YOUR_SEO_API_KEY
+SEARCH_VOL_API_URL=https://api.example.com/search-volume
+SEARCH_VOL_API_KEY=YOUR_SEARCH_VOLUME_API_KEY
+NAMEBIO_API_URL=https://api.example.com/historical-sales
+NAMEBIO_API_KEY=YOUR_NAMEBIO_API_KEY
+
+# Optional official registrar APIs (keep if your deployment uses them)
+GODADDY_API_KEY=
+GODADDY_API_SECRET=
+GODADDY_USE_OTE=false
+NAMECHEAP_API_USER=
+NAMECHEAP_API_KEY=
+NAMECHEAP_USERNAME=
+NAMECHEAP_CLIENT_IP=
+NAMECOM_API_TOKEN=
+NAMECOM_USERNAME=
+
+# =========================
+# Watcher Filters
+# =========================
+ALLOWED_TLDS=.dev,.app,.cloud
+MAX_DOMAINS_PER_CYCLE=200
+ALERT_DB_PATH=alerts.db
+
+# =========================
+# Pricing / Opportunity Rules
+# =========================
+ARBITRAGE_MIN_GAP_USD=20
+ARBITRAGE_MIN_RATIO=1.8
+KEYWORD_VALUE_USD=22
+SEO_BONUS_POINTS=12
+SEARCH_VOL_BONUS_POINTS=10
+NAMEBIO_BONUS_POINTS=15
+
+# =========================
+# Scheduling (Golden Hours UTC)
+# =========================
+# Legacy/default poll
+WATCHER_POLL_SECONDS=30
+# Eco mode (outside peak windows)
+ECO_POLL_SECONDS=120
+# Turbo mode (inside peak windows)
+TURBO_POLL_SECONDS=8
+# Comma-separated hour ranges in UTC (start-end), supports wrap windows
+TURBO_HOURS_UTC=18-21
+
+# =========================
+# Reliability / Anti-Ban Controls
+# =========================
+HTTP_TIMEOUT_SECONDS=20
+PROXY_URL=
+HUMAN_DELAY_MIN_SECONDS=0.8
+HUMAN_DELAY_MAX_SECONDS=2.5
+MAX_RETRY_ATTEMPTS=4
+RETRY_BASE_SECONDS=1.2
+MAX_BACKOFF_SECONDS=45
+QUOTA_COOLDOWN_SECONDS=180
 ```
-doma-pulsebot/
-├── bot.py               # Main bot logic
-├── doma_events.py       # Real async watcher + sources + scoring + dedupe
-├── doma_utils.py        # Formatting helpers
-├── filters.json         # Filter config (WIP)
-├── requirements.txt     # Python deps
-├── .env.example         # Env template
-└── README.md            # You're reading it!
+
+## 3) Run 24/7 in Production
+
+### Option A — nohup (simple)
+
+```bash
+cd /absolute/path/to/doma-pulsebot
+source .venv/bin/activate
+nohup python bot.py > bot.log 2>&1 &
+echo $! > bot.pid
 ```
 
----
+Stop:
 
-## 🛰 Deployment Notes
+```bash
+kill "$(cat bot.pid)"
+```
 
-While currently running locally, this bot is cloud-ready:
+### Option B — tmux (interactive)
 
-- 🧑‍💻 Deploy to: AWS EC2, Railway, Render, Fly.io, or any VPS
-- 🤖 Run in background via `screen`, `systemd`, `pm2`
-- ✅ Accepts `.env` for token/Chat ID
-- 🔁 Works 24/7 with polling
+```bash
+cd /absolute/path/to/doma-pulsebot
+tmux new -s pulsebot
+source .venv/bin/activate
+python bot.py
+```
 
-For production, plug into Doma's real event API or contract logs.
+Detach: `Ctrl+B` then `D`  
+Reattach:
 
----
+```bash
+tmux attach -t pulsebot
+```
 
-## 🎥 Demo Video
+### Option C — systemd (recommended for servers)
 
-🔗 Watch Demo Video : https://youtu.be/TqzAFw2qQ9Y  
-(Demo shows: `/start`, receiving alert, `/stats`, `/filter` UI)
+Create `/etc/systemd/system/doma-pulsebot.service`:
 
----
+```ini
+[Unit]
+Description=Doma PulseBot
+After=network.target
 
-## 🏆 Hackathon Submission
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/absolute/path/to/doma-pulsebot
+EnvironmentFile=/absolute/path/to/doma-pulsebot/.env
+ExecStart=/absolute/path/to/doma-pulsebot/.venv/bin/python /absolute/path/to/doma-pulsebot/bot.py
+Restart=always
+RestartSec=5
 
-- Track: 3 – Bots & Event Subscriptions
-- Team: Solo developer
-- Telegram Bot: [@DomaPulseBot](https://t.me/DomaPulseBot)
-- GitHub: [github.com/KISHU-PT/doma-pulsebot](https://github.com/KISHU-PT/doma-pulsebot)
-- Twitter: [@DocChain25](https://twitter.com/DocChain25)
+[Install]
+WantedBy=multi-user.target
+```
 
----
+Enable and start:
 
-## 📌 Future Roadmap
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable doma-pulsebot
+sudo systemctl start doma-pulsebot
+sudo systemctl status doma-pulsebot
+```
 
-- 🔗 Connect to Doma on-chain events  
-- 🎯 Add TLD + price filters per user  
-- ⚡ Enable sniping or real-time bidding logic  
-- 🖥️ Add web dashboard to manage alerts  
+Logs:
 
----
+```bash
+sudo journalctl -u doma-pulsebot -f
+```
 
-## ⚡ Inspiration
+## 4) Operational Notes
 
-Doma is turning domains into real digital assets. This bot ensures users never miss a chance to grab the next rare or valuable domain — before someone else does.
-
----
-
-## 📬 Contact
-
-- Twitter: [@DocChain25](https://twitter.com/DocChain25)  
-- Telegram: [@DomaPulseBot](https://t.me/DomaPulseBot)
+- The watcher now uses **UTC Golden Hours** (`TURBO_HOURS_UTC`) for turbo polling.
+- Outside Golden Hours, it uses eco polling to preserve quotas.
+- Requests include randomized jitter + retry backoff + 429 cooldown handling.
+- Keep API keys private and rotate keys if any leak is suspected.

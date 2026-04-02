@@ -1,4 +1,3 @@
-# bot.py (safe + works with doma_events.py)
 import logging
 import asyncio
 import os
@@ -11,16 +10,13 @@ from dotenv import load_dotenv
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-# 🆔 Replace with your actual chat ID after testing /start
 DEFAULT_CHAT_ID = int(os.getenv("DEFAULT_CHAT_ID", "123456789"))
 
-# 🔧 Setup logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-# ✅ Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await update.message.reply_text(
@@ -30,19 +26,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Use /filter to set preferences.\nUse /stats for market insights.",
         parse_mode="Markdown"
     )
-    # Print ID in logs so you can update .env
     print(f"🆔 New user Chat ID: {chat_id}")
 
-# 📊 Show fake stats for demo
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📊 Daily Stats:\n"
-        "🔥 23 domains sold today\n"
-        "💰 Average price: 8.4 USDC\n"
-        "🚀 Hottest TLD: .ape"
+        "📊 Watcher Status:\n"
+        "✅ Bot is online\n"
+        f"⚡ Turbo window (UTC): {os.getenv('TURBO_HOURS_UTC', '18-21')}\n"
+        f"🐢 Eco polling: {os.getenv('ECO_POLL_SECONDS', '120')}s\n"
+        f"🚀 Turbo polling: {os.getenv('TURBO_POLL_SECONDS', '8')}s"
     )
 
-# ⚙️ Set filters (for UI)
 async def filter_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton(".ape", callback_data='filter_ape')],
@@ -56,7 +50,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     await query.edit_message_text(f"✅ Filter set: {query.data}")
 
-# 🚀 Main
 def main():
     if not TELEGRAM_TOKEN:
         raise ValueError("❌ TELEGRAM_TOKEN not set in .env")
@@ -64,7 +57,6 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     watcher_task: asyncio.Task | None = None
 
-    # Bot Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("filter", filter_command))
