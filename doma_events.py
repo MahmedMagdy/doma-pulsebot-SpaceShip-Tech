@@ -123,6 +123,7 @@ class WatcherConfig:
     appraisal_concurrency: int = 5
     keyword_value_usd: float = 22.0
     atom_partnership_url: str = ""
+    atom_domain_base_url: str = "https://www.atom.com/domains"
     atom_api_key: str = ""
     atom_user_id: str = ""
     atom_appraisal_url: str = ""
@@ -194,6 +195,7 @@ class WatcherConfig:
             appraisal_concurrency=max(1, int(os.getenv("APPRAISAL_CONCURRENCY", "5"))),
             keyword_value_usd=float(os.getenv("KEYWORD_VALUE_USD", "22")),
             atom_partnership_url=partnership_url,
+            atom_domain_base_url=os.getenv("ATOM_DOMAIN_BASE_URL", "https://www.atom.com/domains").strip() or "https://www.atom.com/domains",
             atom_api_key=os.getenv("ATOM_API_KEY", "").strip(),
             atom_user_id=os.getenv("ATOM_USER_ID", "").strip(),
             atom_appraisal_url=appraisal_url,
@@ -256,28 +258,30 @@ class AlertStore:
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS sent_alerts (
-                domain TEXT PRIMARY KEY,
+                chat_id INTEGER NOT NULL,
+                domain TEXT NOT NULL,
                 source TEXT NOT NULL,
-                first_seen_utc TEXT NOT NULL
+                first_seen_utc TEXT NOT NULL,
+                PRIMARY KEY (chat_id, domain)
             )
             """
         )
         self.conn.commit()
 
-    def has_alerted(self, domain: str) -> bool:
+    def has_alerted(self, chat_id: int, domain: str) -> bool:
         row = self.conn.execute(
-            "SELECT 1 FROM sent_alerts WHERE domain = ?",
-            (domain.lower(),),
+            "SELECT 1 FROM sent_alerts WHERE chat_id = ? AND domain = ?",
+            (chat_id, domain.lower()),
         ).fetchone()
         return row is not None
 
-    def mark_alerted(self, domain: str, source: str) -> None:
+    def mark_alerted(self, chat_id: int, domain: str, source: str) -> None:
         self.conn.execute(
             """
-            INSERT OR IGNORE INTO sent_alerts(domain, source, first_seen_utc)
-            VALUES (?, ?, ?)
+            INSERT OR IGNORE INTO sent_alerts(chat_id, domain, source, first_seen_utc)
+            VALUES (?, ?, ?, ?)
             """,
-            (domain.lower(), source, datetime.now(timezone.utc).isoformat()),
+            (chat_id, domain.lower(), source, datetime.now(timezone.utc).isoformat()),
         )
         self.conn.commit()
 
@@ -917,7 +921,6 @@ def format_alert(opportunity: DomainOpportunity, valuation: ValuationResult) -> 
     domain = escape_md_v2(opportunity.domain)
     method = escape_md_v2(valuation.method)
     source = escape_md_v2(opportunity.source)
-    listing_url = escape_md_v2(opportunity.listing_url)
     ask = escape_md_v2(f"${opportunity.ask_price_usd:.2f} {opportunity.currency}")
     estimate = escape_md_v2(f"${valuation.estimated_value_usd:.2f} USD")
     gap = escape_md_v2(f"${valuation.margin_usd:.2f}")
@@ -946,13 +949,15 @@ async def emit_alert(
     chat_id: int,
     opportunity: DomainOpportunity,
     valuation: ValuationResult,
+    cfg: WatcherConfig,
 ) -> None:
-    keyboard = InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("🛒 Open Listing", url=opportunity.listing_url)],
-            [InlineKeyboardButton("📊 Whois", url=opportunity.whois_url)],
-        ]
-    )
+    atom_base = cfg.atom_domain_base_url.rstrip("/")
+    atom_buy_url = f"{atom_base}/{opportunity.domain}"
+    rows = [[InlineKeyboardButton("🛒 Buy on Atom", url=atom_buy_url)]]
+    if opportunity.listing_url.rstrip("/") != atom_buy_url.rstrip("/"):
+        rows.append([InlineKeyboardButton("🔗 Open Listing", url=opportunity.listing_url)])
+    rows.append([InlineKeyboardButton("📊 Whois", url=opportunity.whois_url)])
+    keyboard = InlineKeyboardMarkup(rows)
     await app.bot.send_message(
         chat_id=chat_id,
         text=format_alert(opportunity, valuation),
@@ -960,6 +965,56 @@ async def emit_alert(
         reply_markup=keyboard,
         disable_web_page_preview=True,
     )
+
+
+def _parse_chat_id_keys(chat_filters: Any) -> list[int]:
+    if not isinstance(chat_filters, dict):
+        return []
+    ids: list[int] = []
+    for key in chat_filters.keys():
+        try:
+            ids.append(int(key))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
+def _chat_filter_matches(
+    opportunity: DomainOpportunity,
+    valuation: ValuationResult,
+    filters: dict[str, Any],
+) -> bool:
+    selected_tlds = filters.get("tlds")
+    if isinstance(selected_tlds, list) and selected_tlds:
+        selected = {str(t).lower() for t in selected_tlds if isinstance(t, str)}
+        if opportunity.tld not in selected:
+            return False
+
+    max_price = parse_float(filters.get("max_price"))
+    if max_price is not None and opportunity.ask_price_usd > max_price:
+        return False
+
+    min_appraisal = parse_float(filters.get("min_appraisal"))
+    if min_appraisal is not None and valuation.estimated_value_usd < min_appraisal:
+        return False
+
+    max_length_raw = filters.get("max_length")
+    if max_length_raw is not None:
+        try:
+            max_length = int(max_length_raw)
+        except (TypeError, ValueError):
+            max_length = None
+        if max_length is not None and len(opportunity.sld) > max_length:
+            return False
+
+    keywords = filters.get("keywords")
+    if isinstance(keywords, list) and keywords:
+        sld = opportunity.sld.lower()
+        normalized = [str(keyword).lower() for keyword in keywords if isinstance(keyword, str)]
+        if normalized and not any(keyword in sld for keyword in normalized):
+            return False
+
+    return True
 
 
 async def watch_events(app: Application, chat_id: int) -> None:
@@ -989,6 +1044,19 @@ async def watch_events(app: Application, chat_id: int) -> None:
 
         try:
             while True:
+                force_scan_event = app.bot_data.get("force_scan_event")
+                if not isinstance(force_scan_event, asyncio.Event):
+                    force_scan_event = asyncio.Event()
+                    app.bot_data["force_scan_event"] = force_scan_event
+
+                force_scan_run = False
+                if bool(app.bot_data.get("watcher_paused", False)):
+                    LOGGER.info("Watcher paused; waiting for /resume or /force_scan trigger.")
+                    await force_scan_event.wait()
+                    force_scan_event.clear()
+                    force_scan_run = True
+                    LOGGER.info("Pause override trigger received; running immediate cycle.")
+
                 now_utc = datetime.now(timezone.utc)
                 in_turbo = is_turbo_hour(now_utc, cfg)
                 poll_seconds = current_poll_seconds(now_utc, cfg)
@@ -1003,12 +1071,13 @@ async def watch_events(app: Application, chat_id: int) -> None:
                 if not opportunities:
                     LOGGER.info("No partnership opportunities found this cycle.")
 
+                chat_filters = app.bot_data.get("chat_filters", {})
+                target_chat_ids = {chat_id}
+                target_chat_ids.update(_parse_chat_id_keys(chat_filters))
+                trademark_cache: dict[str, bool] = {}
+
                 priority_heap: list[tuple[float, str, DomainOpportunity]] = []
                 for opportunity in opportunities:
-                    if opportunity.tld not in cfg.allowed_tlds:
-                        continue
-                    if store.has_alerted(opportunity.domain):
-                        continue
                     heapq.heappush(
                         priority_heap,
                         (
@@ -1082,7 +1151,19 @@ async def watch_events(app: Application, chat_id: int) -> None:
                     quota_wait,
                     breaker_wait,
                 )
-                await asyncio.sleep(next_wait)
+                if force_scan_run:
+                    continue
+
+                if bool(app.bot_data.get("watcher_paused", False)):
+                    LOGGER.info("Watcher set to paused after cycle; waiting for trigger.")
+                    continue
+
+                try:
+                    await asyncio.wait_for(force_scan_event.wait(), timeout=next_wait)
+                    force_scan_event.clear()
+                    LOGGER.info("Force scan command received; running next cycle immediately.")
+                except TimeoutError:
+                    pass
         except asyncio.CancelledError:
             LOGGER.info("Atom watcher cancelled.")
             raise
