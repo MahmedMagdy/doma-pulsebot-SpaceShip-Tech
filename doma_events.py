@@ -891,7 +891,13 @@ async def fetch_godaddy_domains(app: Application, chat_id: int) -> dict[str, int
                 return summary
 
             limit = min(cfg.max_domains_per_cycle, len(candidate_domains))
-            selected_domains = candidate_domains[:limit]
+            domain_cursor = int(app.bot_data.get("domain_cursor", 0))
+            selected_domains, next_cursor = select_circular_batch(
+                candidate_domains,
+                domain_cursor,
+                limit,
+            )
+            app.bot_data["domain_cursor"] = next_cursor
             LOGGER.info("Fetching from GoDaddy: domains=%s", len(selected_domains))
 
             async def check_with_guard(domain: str) -> Optional[DomainOpportunity]:
