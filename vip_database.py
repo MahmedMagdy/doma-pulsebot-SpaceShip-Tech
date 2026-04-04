@@ -48,6 +48,7 @@ def load_vip_database(folder: Path) -> dict[str, VipRecord]:
         LOGGER.warning("VIP data folder missing: %s", folder)
         return records
 
+    # Intentionally load all CSV files in vip_data/ for dynamic growth without naming constraints.
     csv_paths = sorted(folder.glob("*.[cC][sS][vV]"))
     if not csv_paths:
         LOGGER.warning("No VIP CSV files found in: %s", folder)

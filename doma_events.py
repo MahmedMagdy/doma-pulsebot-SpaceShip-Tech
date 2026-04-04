@@ -1097,13 +1097,15 @@ async def watch_events(app: Application, chat_id: int) -> None:
         scan_semaphore = asyncio.Semaphore(cfg.scan_concurrency)
         vip_folder = Path(__file__).with_name("vip_data")
         current_vip_db = get_vip_database(vip_folder)
+        vip_snapshot_lock = asyncio.Lock()
 
         async def vip_reload_loop() -> None:
             nonlocal current_vip_db
             while True:
                 try:
                     refreshed = reload_vip_database(vip_folder)
-                    current_vip_db = refreshed
+                    async with vip_snapshot_lock:
+                        current_vip_db = refreshed
                     LOGGER.info("VIP DB reloaded entries=%s", len(refreshed))
                 except Exception as exc:
                     LOGGER.warning("VIP DB reload failed: %s", exc)
@@ -1174,12 +1176,15 @@ async def watch_events(app: Application, chat_id: int) -> None:
                             LOGGER.exception("Failed to evaluate %s: %s", candidate.domain, exc)
                             return candidate, None
 
+                async with vip_snapshot_lock:
+                    active_vip_db = current_vip_db
+
                 vip_candidates: list[DomainOpportunity] = []
                 non_vip_candidates: list[DomainOpportunity] = []
                 for item in candidates:
                     root_word = item.sld.lower()
                     tld = item.tld.lower()
-                    vip_match = tld in cfg.allowed_tlds and root_word in current_vip_db
+                    vip_match = tld in cfg.allowed_tlds and root_word in active_vip_db
                     if vip_match:
                         vip_candidates.append(item)
                     else:
@@ -1187,7 +1192,7 @@ async def watch_events(app: Application, chat_id: int) -> None:
 
                 for opportunity in vip_candidates:
                     try:
-                        vip_record = current_vip_db.get(opportunity.sld)
+                        vip_record = active_vip_db.get(opportunity.sld)
                         if vip_record is None:
                             continue
                         for target_chat_id in target_chat_ids:
@@ -1203,11 +1208,7 @@ async def watch_events(app: Application, chat_id: int) -> None:
                     candidate: DomainOpportunity,
                 ) -> tuple[DomainOpportunity, Optional[ValuationResult]]:
                     async with scan_semaphore:
-                        try:
-                            return await evaluate_with_guard(candidate)
-                        except Exception as exc:
-                            LOGGER.exception("Failed to evaluate %s: %s", candidate.domain, exc)
-                            return candidate, None
+                        return await evaluate_with_guard(candidate)
 
                 evaluated = await asyncio.gather(*(evaluate_with_scan_guard(item) for item in non_vip_candidates))
 
