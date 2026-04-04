@@ -29,6 +29,8 @@ MIN_CIRCUIT_BREAKER_SECONDS = 30
 GODADDY_PRICE_MICROS_THRESHOLD = 100000
 DEFAULT_FALLBACK_ASK_PRICE_USD = 10.0
 WATCHER_ERROR_RETRY_SECONDS = 5
+STRICT_GODADDY_THROTTLE_SECONDS = 2
+GODADDY_BULK_BATCH_SIZE = 50
 
 
 class GoDaddyCircuitOpenError(Exception):
@@ -471,6 +473,7 @@ class GoDaddyClient:
         url: str,
         *,
         params: Optional[dict[str, Any]] = None,
+        json: Optional[Any] = None,
         context_label: str,
     ) -> Optional[Any]:
         if not url:
@@ -492,6 +495,7 @@ class GoDaddyClient:
                     url,
                     headers=self._headers(),
                     params=params,
+                    json=json,
                     proxy=self.cfg.proxy_url or None,
                 ) as response:
                     body = await response.text()
@@ -503,9 +507,9 @@ class GoDaddyClient:
                             "%s rate-limited (429) on %s; retrying in %.2fs",
                             context_label,
                             url,
-                            wait_seconds,
+                            float(STRICT_GODADDY_THROTTLE_SECONDS),
                         )
-                        await asyncio.sleep(wait_seconds)
+                        await asyncio.sleep(STRICT_GODADDY_THROTTLE_SECONDS)
                         continue
                     if 500 <= response.status < 600:
                         self._note_retryable_failure()
@@ -514,9 +518,9 @@ class GoDaddyClient:
                             "%s upstream status=%s; retrying in %.2fs",
                             context_label,
                             response.status,
-                            wait_seconds,
+                            float(STRICT_GODADDY_THROTTLE_SECONDS),
                         )
-                        await asyncio.sleep(wait_seconds)
+                        await asyncio.sleep(STRICT_GODADDY_THROTTLE_SECONDS)
                         continue
                     if response.status != 200:
                         raise RuntimeError(
@@ -532,8 +536,13 @@ class GoDaddyClient:
                 last_error = f"{type(exc).__name__}: {exc}"
                 self._note_retryable_failure()
                 wait_seconds = self._backoff_seconds(attempt)
-                LOGGER.info("%s network error: %s; retrying in %.2fs", context_label, exc, wait_seconds)
-                await asyncio.sleep(wait_seconds)
+                LOGGER.info(
+                    "%s network error: %s; retrying in %.2fs",
+                    context_label,
+                    exc,
+                    float(STRICT_GODADDY_THROTTLE_SECONDS),
+                )
+                await asyncio.sleep(STRICT_GODADDY_THROTTLE_SECONDS)
 
         if last_error:
             raise RuntimeError(f"{context_label} failed after retries: {last_error}")
@@ -577,6 +586,69 @@ class GoDaddyClient:
             currency="USD",
             availability_status=status_text,
         )
+
+    async def check_domains_availability_bulk(self, domains: list[str]) -> tuple[list[DomainOpportunity], int]:
+        if not domains:
+            return [], 0
+
+        url = f"{self._base_url}/v1/domains/available"
+        payload = await self._request_json_with_retry(
+            "POST",
+            url,
+            params={"checkType": self.cfg.godaddy_check_type},
+            json={"domains": domains},
+            context_label="GoDaddy Domain Availability Bulk",
+        )
+
+        if not isinstance(payload, list):
+            raise RuntimeError("GoDaddy bulk availability returned unexpected payload format")
+
+        opportunities: list[DomainOpportunity] = []
+        failed_count = 0
+        normalized_input = {d.strip().lower() for d in domains if isinstance(d, str) and d.strip()}
+        seen_domains: set[str] = set()
+
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            normalized_domain = str(item.get("domain") or "").strip().lower()
+            if normalized_domain:
+                seen_domains.add(normalized_domain)
+
+            available = item.get("available")
+            if isinstance(available, bool) and not available:
+                continue
+
+            if not normalized_domain or "." not in normalized_domain:
+                failed_count += 1
+                continue
+
+            ask_price = _normalize_godaddy_price(item.get("price"))
+            if ask_price is None or ask_price <= 0:
+                LOGGER.warning(
+                    "GoDaddy price missing/invalid for %s; using fallback ask price $%.2f",
+                    normalized_domain,
+                    DEFAULT_FALLBACK_ASK_PRICE_USD,
+                )
+                ask_price = DEFAULT_FALLBACK_ASK_PRICE_USD
+
+            status_text = str(item.get("status") or "").strip() or "Available"
+            opportunities.append(
+                DomainOpportunity(
+                    domain=normalized_domain,
+                    ask_price_usd=ask_price,
+                    source="GoDaddy Availability API",
+                    listing_url=f"https://www.godaddy.com/domainsearch/find?domainToCheck={normalized_domain}",
+                    currency="USD",
+                    availability_status=status_text,
+                )
+            )
+
+        if normalized_input:
+            missing = normalized_input.difference(seen_domains)
+            failed_count += len(missing)
+
+        return opportunities, failed_count
 
 
 async def evaluate_opportunity(
@@ -882,7 +954,6 @@ async def fetch_godaddy_domains(app: Application, chat_id: int) -> dict[str, int
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             client = GoDaddyClient(session, cfg)
-            scan_semaphore = asyncio.Semaphore(cfg.scan_concurrency)
             vip_folder = Path(__file__).with_name("vip_data")
             active_vip_db = get_vip_database(vip_folder)
             candidate_domains = build_candidate_domains(active_vip_db, cfg)
@@ -892,6 +963,7 @@ async def fetch_godaddy_domains(app: Application, chat_id: int) -> dict[str, int
                     "vip_matches": 0,
                     "general_finds": 0,
                     "opportunities": 0,
+                    "api_blocked_failed": 0,
                     "quota_wait_seconds": 0,
                     "breaker_wait_seconds": 0,
                 }
@@ -908,20 +980,27 @@ async def fetch_godaddy_domains(app: Application, chat_id: int) -> dict[str, int
             )
             app.bot_data["domain_cursor"] = next_cursor
             LOGGER.info("Fetching from GoDaddy: domains=%s", len(selected_domains))
-
-            async def check_with_guard(domain: str) -> Optional[DomainOpportunity]:
-                async with scan_semaphore:
-                    try:
-                        return await client.check_domain_availability(domain)
-                    except GoDaddyCircuitOpenError as exc:
-                        LOGGER.info("%s", exc)
-                        return None
-                    except Exception as exc:
-                        LOGGER.warning("Availability check failed for %s: %s", domain, exc)
-                        return None
-
-            checks = await asyncio.gather(*(check_with_guard(domain) for domain in selected_domains))
-            opportunities = [op for op in checks if op is not None]
+            opportunities: list[DomainOpportunity] = []
+            api_blocked_failed = 0
+            for idx in range(0, len(selected_domains), GODADDY_BULK_BATCH_SIZE):
+                batch = selected_domains[idx : idx + GODADDY_BULK_BATCH_SIZE]
+                try:
+                    batch_opps, batch_failed = await client.check_domains_availability_bulk(batch)
+                    opportunities.extend(batch_opps)
+                    api_blocked_failed += int(batch_failed)
+                except GoDaddyCircuitOpenError as exc:
+                    LOGGER.info("%s", exc)
+                    api_blocked_failed += len(batch)
+                except Exception as exc:
+                    LOGGER.warning(
+                        "Availability bulk check failed for batch_start=%s size=%s: %s",
+                        idx,
+                        len(batch),
+                        exc,
+                    )
+                    api_blocked_failed += len(batch)
+                if idx + GODADDY_BULK_BATCH_SIZE < len(selected_domains):
+                    await asyncio.sleep(STRICT_GODADDY_THROTTLE_SECONDS)
             LOGGER.info("Fetched %s domains from GoDaddy (available=%s)", len(selected_domains), len(opportunities))
 
             chat_filters = app.bot_data.get("chat_filters", {})
@@ -1034,6 +1113,7 @@ async def fetch_godaddy_domains(app: Application, chat_id: int) -> dict[str, int
                 "vip_matches": vip_match_count,
                 "general_finds": general_match_count,
                 "opportunities": len(opportunities),
+                "api_blocked_failed": api_blocked_failed,
                 "quota_wait_seconds": client.quota_backoff_remaining_seconds(),
                 "breaker_wait_seconds": client.circuit_open_remaining_seconds(),
             }

@@ -238,20 +238,34 @@ async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def force_scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await update.message.reply_text("🚨 Forced scan started. Contacting GoDaddy now...", parse_mode="HTML")
+    checked = 0
+    api_blocked_failed = 0
+    vip = 0
+    general = 0
     try:
         summary = await fetch_godaddy_domains(context.application, chat_id)
         checked = int(summary.get("domains_checked", 0))
+        api_blocked_failed = int(summary.get("api_blocked_failed", 0))
         vip = int(summary.get("vip_matches", 0))
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"✅ Checked {checked} domains, Found {vip} VIPs",
-            parse_mode="HTML",
-        )
+        general = int(summary.get("general_finds", 0))
     except Exception as exc:
         logging.exception("Direct /force_scan failed: %s", exc)
+        latest_summary = context.application.bot_data.get("latest_scan_summary", {})
+        if isinstance(latest_summary, dict):
+            checked = int(latest_summary.get("domains_checked", checked))
+            api_blocked_failed = int(latest_summary.get("api_blocked_failed", api_blocked_failed))
+            vip = int(latest_summary.get("vip_matches", vip))
+            general = int(latest_summary.get("general_finds", general))
+    finally:
         await context.bot.send_message(
             chat_id=chat_id,
-            text="❌ Forced scan failed. Check logs for details.",
+            text=(
+                "✅ <b>Scan Cycle Finished</b>\n"
+                f"Checked: {checked}\n"
+                f"API Blocked/Failed: {api_blocked_failed}\n"
+                f"Available VIP: {vip}\n"
+                f"Available General: {general}"
+            ),
             parse_mode="HTML",
         )
 
