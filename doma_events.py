@@ -25,7 +25,7 @@ LOGGER = logging.getLogger(__name__)
 
 # ─── Tuning constants ────────────────────────────────────────────────────────
 MAIN_CHAT_ID = '-1003736596502'
-TELEGRAM_TOPICS_MAP = { '.dev': 23, '.app': 3, '.my': 2, '.tech': 4, '.com': 5, '.ai': None }
+TELEGRAM_TOPICS_MAP = {'.my': 2, '.app': 3, '.tech': 4, '.com': 5, '.ai': 6, '.dev': 23}
 PRIORITY_TLDS = frozenset({".com", ".tech", ".my", ".app", ".dev", ".ai"})
 
 MIN_POLL_SECONDS = 1
@@ -364,11 +364,12 @@ def score_with_internal_rules(domain: str, cfg: WatcherConfig) -> tuple[float, f
         brandability = 38.0
 
     tld_score = {
-        ".ae": 65.0,
+        ".ai": 65.0,
         ".tech": 62.0,
         ".my": 61.0,
         ".com": 64.0,
         ".app": 58.0,
+        ".dev": 60.0,
     }.get(tld_pref, 20.0)
 
     matched_keywords = [kw for kw in cfg.high_value_keywords if kw in sld]
@@ -676,7 +677,7 @@ class SpaceshipClient:
         Bulk-check up to SPACESHIP_BULK_BATCH_SIZE domains in a single POST.
 
         Endpoint: POST {base_url}/domains/available
-        Body:     {"domains": ["d1.com", "d2.ae", ...]}
+        Body:     {"domains": ["d1.com", "d2.ai", ...]}
 
         Returns (opportunities, failed_count).
         """
@@ -979,37 +980,42 @@ async def send_telegram_notification(
     _, _, ext = clean_domain.rpartition(".")
     tld = f".{ext}" if ext else ""
 
-    payload: dict[str, Any] = {
+    base_payload: dict[str, Any] = {
         "chat_id": int(MAIN_CHAT_ID),
         "text": text,
         "parse_mode": parse_mode,
         "disable_web_page_preview": disable_web_page_preview,
     }
     if reply_markup is not None:
-        payload["reply_markup"] = reply_markup
+        base_payload["reply_markup"] = reply_markup
 
     mapped_thread_id = TELEGRAM_TOPICS_MAP.get(tld)
-    if tld in TELEGRAM_TOPICS_MAP and mapped_thread_id is not None:
-        payload["message_thread_id"] = mapped_thread_id
+    if mapped_thread_id is not None:
+        topic_payload = dict(base_payload)
+        topic_payload["message_thread_id"] = mapped_thread_id
+        while True:
+            try:
+                await app.bot.send_message(**topic_payload)
+                print(f"[SUCCESS] Sent to Topic {mapped_thread_id}")
+                await asyncio.sleep(1.5)
+                return
+            except RetryAfter as e:
+                await asyncio.sleep(float(getattr(e, "retry_after", 1) or 1))
+            except Exception:
+                break
 
     while True:
         try:
-            await app.bot.send_message(**payload)
-            await asyncio.sleep(1)
+            await app.bot.send_message(**base_payload)
+            print("[FALLBACK] Thread failed, sent to General Group.")
+            await asyncio.sleep(1.5)
             return
         except RetryAfter as e:
-            wait_time = int(getattr(e, "retry_after", 1) or 1)
-            LOGGER.warning(
-                "Telegram flood control exceeded. Retrying in %s seconds (domain=%s)",
-                wait_time,
-                domain_name,
-            )
-            await asyncio.sleep(wait_time)
+            await asyncio.sleep(float(getattr(e, "retry_after", 1) or 1))
         except Exception:
             LOGGER.exception(
-                "Telegram send failed chat_id=%s thread_id=%s tld=%s domain=%s",
-                payload["chat_id"],
-                payload.get("message_thread_id"),
+                "Telegram fallback send failed chat_id=%s tld=%s domain=%s",
+                base_payload["chat_id"],
                 tld or "N/A",
                 domain_name,
             )
@@ -1313,11 +1319,11 @@ async def fetch_spaceship_domains(app: Application, chat_id: int) -> dict[str, i
             app.bot_data["domain_cursor"] = next_cursor
             LOGGER.info("Fetching from Spaceship API: domains=%s", len(selected_domains))
             com_count = sum(1 for d in selected_domains if d.endswith(".com"))
-            ae_count = sum(1 for d in selected_domains if d.endswith(".ae"))
+            ai_count = sum(1 for d in selected_domains if d.endswith(".ai"))
             LOGGER.info(
-                "Priority coverage this cycle: .com=%s .ae=%s (total=%s)",
+                "Priority coverage this cycle: .com=%s .ai=%s (total=%s)",
                 com_count,
-                ae_count,
+                ai_count,
                 len(selected_domains),
             )
             opportunities: list[DomainOpportunity] = []
