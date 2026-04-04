@@ -80,7 +80,7 @@ ATOM_APPRAISAL_KEY=YOUR_ATOM_APPRAISAL_KEY
 # =========================
 # Watcher Filters
 # =========================
-ALLOWED_TLDS=.ae,.twitch,.my,.com,.app
+ALLOWED_TLDS=.ae,.tech,.my,.com,.app
 MAX_DOMAINS_PER_CYCLE=200
 ALERT_DB_PATH=alerts.db
 

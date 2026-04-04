@@ -14,7 +14,7 @@ import aiohttp
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import Application
-from vip_database import VipRecord, load_vip_database
+from vip_database import VipRecord, get_vip_database
 
 LOGGER = logging.getLogger(__name__)
 SPECIAL_CHARS = r"_*[]()~`>#+-=|{}.!"
@@ -94,7 +94,7 @@ class WatcherConfig:
     circuit_breaker_open_seconds: int = 120
     min_margin_usd: float = 20.0
     min_margin_ratio: float = 1.8
-    allowed_tlds: set[str] = field(default_factory=lambda: {".ae", ".twitch", ".my", ".com", ".app"})
+    allowed_tlds: set[str] = field(default_factory=lambda: {".ae", ".tech", ".my", ".com", ".app"})
     high_value_keywords: set[str] = field(
         default_factory=lambda: {
             "ai",
@@ -139,7 +139,7 @@ class WatcherConfig:
 
     @classmethod
     def from_env(cls) -> "WatcherConfig":
-        raw_tlds = os.getenv("ALLOWED_TLDS", ".ae,.twitch,.my,.com,.app")
+        raw_tlds = os.getenv("ALLOWED_TLDS", ".ae,.tech,.my,.com,.app")
         allowed_tlds = {
             t.strip().lower() if t.strip().startswith(".") else f".{t.strip().lower()}"
             for t in raw_tlds.split(",")
@@ -184,7 +184,7 @@ class WatcherConfig:
             ),
             min_margin_usd=float(os.getenv("ARBITRAGE_MIN_GAP_USD", "20")),
             min_margin_ratio=float(os.getenv("ARBITRAGE_MIN_RATIO", "1.8")),
-            allowed_tlds=allowed_tlds or {".ae", ".twitch", ".my", ".com", ".app"},
+            allowed_tlds=allowed_tlds or {".ae", ".tech", ".my", ".com", ".app"},
             high_value_keywords=high_value_keywords
             or {"ai", "crypto", "cloud", "data", "dev", "app", "bot", "pay", "trade", "labs"},
             negative_keywords=negative_keywords
@@ -386,7 +386,7 @@ def score_with_internal_rules(domain: str, cfg: WatcherConfig) -> tuple[float, s
 
     tld_score = {
         ".ae": 65.0,
-        ".twitch": 62.0,
+        ".tech": 62.0,
         ".my": 61.0,
         ".com": 64.0,
         ".app": 58.0,
@@ -989,8 +989,8 @@ def format_vip_alert(opportunity: DomainOpportunity, vip: VipRecord) -> str:
         f"🟢 Status: {opportunity.availability_status}\n"
         f"🏢 Sector: {vip.sector or 'N/A'}\n"
         f"⭐ Rating: {vip.rating or 'N/A'}\n"
-        f"🇬🇧 English Meaning: {vip.meaning_en or 'N/A'}\n"
-        f"🇦🇪 Arabic Meaning: {vip.meaning_ar or 'N/A'}"
+        f"🇬🇧 EN Meaning: {vip.meaning_en or 'N/A'}\n"
+        f"🇦🇪 AR Meaning: {vip.meaning_ar or 'N/A'}"
     )
 
 
@@ -1067,7 +1067,7 @@ async def watch_events(app: Application, chat_id: int) -> None:
     cfg = WatcherConfig.from_env()
     validate_required_atom_config(cfg)
     store = AlertStore(cfg.db_path)
-    vip_db = load_vip_database(Path(__file__).with_name("vip_data"))
+    vip_db = get_vip_database(Path(__file__).with_name("vip_data"))
     timeout = aiohttp.ClientTimeout(total=cfg.request_timeout_seconds)
 
     LOGGER.info(
@@ -1158,9 +1158,11 @@ async def watch_events(app: Application, chat_id: int) -> None:
                     vip_candidates: list[DomainOpportunity] = []
                     non_vip_candidates: list[DomainOpportunity] = []
                     for item in batch:
+                        root_word = item.sld.lower()
+                        tld = item.tld.lower()
                         vip_match = (
-                            item.tld in cfg.allowed_tlds
-                            and item.sld in vip_db
+                            tld in cfg.allowed_tlds
+                            and root_word in vip_db
                         )
                         if vip_match:
                             vip_candidates.append(item)
