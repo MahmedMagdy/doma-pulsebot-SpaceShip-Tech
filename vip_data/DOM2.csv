@@ -1,0 +1,101 @@
+﻿القطاع,الاختصار,التقييم,المعنى بالإنجليزية,المعنى بالعربية
+التكنولوجيا المالية والبنوك (FinTech),BNPL,10/10,Buy Now Pay Later,اشتر الآن وادفع لاحقاً
+التكنولوجيا المالية والبنوك (FinTech),ETF,10/10,Exchange Traded Fund,صناديق الاستثمار المتداولة
+التكنولوجيا المالية والبنوك (FinTech),IPO,10/10,Initial Public Offering,الاكتتاب العام الأولي
+التكنولوجيا المالية والبنوك (FinTech),ACH,9/10,Automated Clearing House,غرفة المقاصة الآلية (تحويلات بنكية)
+التكنولوجيا المالية والبنوك (FinTech),MNA,9.5/10,Mergers and Acquisitions,الاندماج والاستحواذ
+التكنولوجيا المالية والبنوك (FinTech),PNL,9/10,Profit and Loss,الأرباح والخسائر
+التكنولوجيا المالية والبنوك (FinTech),ROE,8.5/10,Return on Equity,العائد على حقوق الملكية
+التكنولوجيا المالية والبنوك (FinTech),YTD,8/10,Year to Date,منذ بداية العام حتى اليوم
+التكنولوجيا المالية والبنوك (FinTech),CFP,9/10,Certified Financial Planner,مخطط مالي معتمد
+التكنولوجيا المالية والبنوك (FinTech),CFO,9.5/10,Chief Financial Officer,المدير المالي
+التكنولوجيا المالية والبنوك (FinTech),EPS,8.5/10,Earnings Per Share,ربحية السهم
+التكنولوجيا المالية والبنوك (FinTech),NAV,8.5/10,Net Asset Value,صافي قيمة الأصول
+التكنولوجيا المالية والبنوك (FinTech),AUM,9/10,Assets Under Management,الأصول المدارة
+التكنولوجيا المالية والبنوك (FinTech),LBO,8/10,Leveraged Buyout,الاستحواذ المدعوم بالقروض
+التكنولوجيا المالية والبنوك (FinTech),PEF,8.5/10,Private Equity Fund,صندوق الملكية الخاصة
+التكنولوجيا المالية والبنوك (FinTech),SWF,8.5/10,Sovereign Wealth Fund,صندوق الثروة السيادي
+التكنولوجيا المالية والبنوك (FinTech),NPL,8/10,Non-Performing Loan,القروض المتعثرة
+التكنولوجيا المالية والبنوك (FinTech),BPO,9/10,Business Process Outsourcing,تعهيد العمليات التجارية
+التكنولوجيا المالية والبنوك (FinTech),ATM,10/10,Automated Teller Machine,ماكينة الصراف الآلي
+التكنولوجيا المالية والبنوك (FinTech),CPA,9.5/10,Certified Public Accountant,محاسب قانوني معتمد
+التعليم وتكنولوجيا التعليم (EdTech),LMS,10/10,Learning Management System,نظام إدارة التعلم
+التعليم وتكنولوجيا التعليم (EdTech),SIS,9/10,Student Information System,نظام معلومات الطلاب
+التعليم وتكنولوجيا التعليم (EdTech),MOOC,9.5/10,Massive Open Online Course,الدورات التدريبية المفتوحة
+التعليم وتكنولوجيا التعليم (EdTech),STEM,10/10,Science Tech Engineering Math,العلوم والتكنولوجيا والهندسة والرياضيات
+التعليم وتكنولوجيا التعليم (EdTech),ESL,9.5/10,English as a Second Language,الإنجليزية كلغة ثانية
+التعليم وتكنولوجيا التعليم (EdTech),TEFL,9/10,Teaching English as a Foreign Language,تدريس الإنجليزية كلغة أجنبية
+التعليم وتكنولوجيا التعليم (EdTech),TESOL,8.5/10,Teaching English to Speakers of Other Languages,تدريس الإنجليزية للناطقين بلغات أخرى
+التعليم وتكنولوجيا التعليم (EdTech),GPA,9.5/10,Grade Point Average,المعدل التراكمي
+التعليم وتكنولوجيا التعليم (EdTech),SAT,10/10,Scholastic Assessment Test,اختبار القبول الجامعي الأمريكي
+التعليم وتكنولوجيا التعليم (EdTech),GRE,9/10,Graduate Record Examinations,اختبار قبول الدراسات العليا
+التعليم وتكنولوجيا التعليم (EdTech),GMAT,9/10,Graduate Management Admission Test,اختبار قبول كليات الإدارة
+التعليم وتكنولوجيا التعليم (EdTech),MBA,10/10,Master of Business Administration,ماجستير إدارة الأعمال
+التعليم وتكنولوجيا التعليم (EdTech),PHD,10/10,Doctor of Philosophy,الدكتوراه
+التعليم وتكنولوجيا التعليم (EdTech),K12,10/10,Kindergarten to 12th Grade,التعليم من التمهيدي للثانوي
+التعليم وتكنولوجيا التعليم (EdTech),VLE,8.5/10,Virtual Learning Environment,بيئة التعلم الافتراضية
+التعليم وتكنولوجيا التعليم (EdTech),OER,8/10,Open Educational Resources,الموارد التعليمية المفتوحة
+التعليم وتكنولوجيا التعليم (EdTech),IEP,8.5/10,Individualized Education Program,برنامج التعليم الفردي
+التعليم وتكنولوجيا التعليم (EdTech),CPD,8.5/10,Continuing Professional Development,التطوير المهني المستمر
+التعليم وتكنولوجيا التعليم (EdTech),MCQ,9/10,Multiple Choice Question,أسئلة الاختيار من متعدد
+التعليم وتكنولوجيا التعليم (EdTech),EDU,10/10,Education,التعليم
+التجارة الإلكترونية واللوجستيات (E-commerce),SKU,10/10,Stock Keeping Unit,وحدة حفظ المخزون
+التجارة الإلكترونية واللوجستيات (E-commerce),COD,10/10,Cash on Delivery,الدفع عند الاستلام
+التجارة الإلكترونية واللوجستيات (E-commerce),3PL,10/10,Third-Party Logistics,طرف ثالث للخدمات اللوجستية
+التجارة الإلكترونية واللوجستيات (E-commerce),4PL,9.5/10,Fourth-Party Logistics,طرف رابع للخدمات اللوجستية
+التجارة الإلكترونية واللوجستيات (E-commerce),WMS,9.5/10,Warehouse Management System,نظام إدارة المستودعات
+التجارة الإلكترونية واللوجستيات (E-commerce),SCM,9/10,Supply Chain Management,إدارة سلسلة التوريد
+التجارة الإلكترونية واللوجستيات (E-commerce),FBA,9.5/10,Fulfillment by Amazon,الشحن من قبل أمازون
+التجارة الإلكترونية واللوجستيات (E-commerce),FBM,9/10,Fulfillment by Merchant,الشحن من قبل التاجر
+التجارة الإلكترونية واللوجستيات (E-commerce),LTL,8.5/10,Less Than Truckload,شحن أقل من حمولة شاحنة
+التجارة الإلكترونية واللوجستيات (E-commerce),FTL,8.5/10,Full Truckload,حمولة شاحنة كاملة
+التجارة الإلكترونية واللوجستيات (E-commerce),FMCG,9/10,Fast-Moving Consumer Goods,السلع الاستهلاكية سريعة التداول
+التجارة الإلكترونية واللوجستيات (E-commerce),MSRP,8.5/10,Manufacturer Suggested Retail Price,سعر التجزئة المقترح
+التجارة الإلكترونية واللوجستيات (E-commerce),RMA,8.5/10,Return Merchandise Authorization,تصريح إرجاع البضائع
+التجارة الإلكترونية واللوجستيات (E-commerce),RFP,9/10,Request for Proposal,طلب تقديم عروض
+التجارة الإلكترونية واللوجستيات (E-commerce),RFQ,9/10,Request for Quotation,طلب تسعير
+التجارة الإلكترونية واللوجستيات (E-commerce),OOH,8.5/10,Out of Home Advertising,الإعلانات الخارجية
+التجارة الإلكترونية واللوجستيات (E-commerce),JIT,8.5/10,Just In Time,في الوقت المحدد (إدارة المخزون)
+التجارة الإلكترونية واللوجستيات (E-commerce),POD,10/10,Print on Demand,الطباعة عند الطلب
+التجارة الإلكترونية واللوجستيات (E-commerce),O2O,9/10,Online to Offline,من الإنترنت إلى الواقع
+التجارة الإلكترونية واللوجستيات (E-commerce),ETA,9.5/10,Estimated Time of Arrival,الوقت المتوقع للوصول
+العقارات وتكنولوجيا العقارات (PropTech),MLS,10/10,Multiple Listing Service,خدمة الإدراج المتعدد للعقارات
+العقارات وتكنولوجيا العقارات (PropTech),REIT,9.5/10,Real Estate Investment Trust,صناديق الاستثمار العقاري
+العقارات وتكنولوجيا العقارات (PropTech),HOA,10/10,Homeowners Association,جمعية ملاك المنازل
+العقارات وتكنولوجيا العقارات (PropTech),ARV,9/10,After Repair Value,قيمة العقار بعد الإصلاح
+العقارات وتكنولوجيا العقارات (PropTech),CRE,9.5/10,Commercial Real Estate,العقارات التجارية
+العقارات وتكنولوجيا العقارات (PropTech),STR,9/10,Short-Term Rental,الإيجار قصير المدى
+العقارات وتكنولوجيا العقارات (PropTech),LTR,8.5/10,Long-Term Rental,الإيجار طويل المدى
+العقارات وتكنولوجيا العقارات (PropTech),FSBO,9/10,For Sale By Owner,للبيع من قبل المالك مباشرة
+العقارات وتكنولوجيا العقارات (PropTech),NOI,8.5/10,Net Operating Income,صافي الدخل التشغيلي
+العقارات وتكنولوجيا العقارات (PropTech),CAP,9/10,Capitalization Rate,معدل العائد الرأسمالي
+العقارات وتكنولوجيا العقارات (PropTech),PMI,8.5/10,Private Mortgage Insurance,تأمين الرهن العقاري الخاص
+العقارات وتكنولوجيا العقارات (PropTech),FHA,9/10,Federal Housing Administration,إدارة الإسكان الفيدرالية
+العقارات وتكنولوجيا العقارات (PropTech),SQFT,10/10,Square Feet,قدم مربع (مقياس مساحة)
+العقارات وتكنولوجيا العقارات (PropTech),BIM,9.5/10,Building Information Modeling,نمذجة معلومات البناء
+العقارات وتكنولوجيا العقارات (PropTech),CAD,10/10,Computer-Aided Design,التصميم بمساعدة الحاسوب
+العقارات وتكنولوجيا العقارات (PropTech),HVAC,10/10,Heating Ventilation Air Conditioning,التدفئة والتهوية وتكييف الهواء
+العقارات وتكنولوجيا العقارات (PropTech),MEP,9/10,Mechanical Electrical Plumbing,الميكانيكا والكهرباء والسباكة
+العقارات وتكنولوجيا العقارات (PropTech),BTR,8.5/10,Build to Rent,البناء لغرض التأجير
+العقارات وتكنولوجيا العقارات (PropTech),NNN,8/10,Triple Net Lease,عقد إيجار ثلاثي الصافي
+العقارات وتكنولوجيا العقارات (PropTech),REO,8.5/10,Real Estate Owned,عقارات مملوكة للبنوك
+الأمن السيبراني والشبكات (Cyber & IT),VPN,10/10,Virtual Private Network,شبكة خاصة افتراضية
+الأمن السيبراني والشبكات (Cyber & IT),API,10/10,Application Programming Interface,واجهة برمجة التطبيقات
+الأمن السيبراني والشبكات (Cyber & IT),CDN,10/10,Content Delivery Network,شبكة توصيل المحتوى
+الأمن السيبراني والشبكات (Cyber & IT),SSL,10/10,Secure Sockets Layer,طبقة المقابس الآمنة
+الأمن السيبراني والشبكات (Cyber & IT),TLS,9.5/10,Transport Layer Security,أمن طبقة النقل
+الأمن السيبراني والشبكات (Cyber & IT),DNS,10/10,Domain Name System,نظام أسماء النطاقات
+الأمن السيبراني والشبكات (Cyber & IT),DDoS,9.5/10,Distributed Denial of Service,هجمات الحرمان من الخدمة
+الأمن السيبراني والشبكات (Cyber & IT),WAF,9.5/10,Web Application Firewall,جدار حماية تطبيقات الويب
+الأمن السيبراني والشبكات (Cyber & IT),IAM,9/10,Identity and Access Management,إدارة الهوية والوصول
+الأمن السيبراني والشبكات (Cyber & IT),MFA,9.5/10,Multi-Factor Authentication,المصادقة متعددة العوامل
+الأمن السيبراني والشبكات (Cyber & IT),2FA,10/10,Two-Factor Authentication,المصادقة الثنائية
+الأمن السيبراني والشبكات (Cyber & IT),SSO,9.5/10,Single Sign-On,الدخول الموحد
+الأمن السيبراني والشبكات (Cyber & IT),SIEM,8.5/10,Security Information and Event Management,إدارة المعلومات والأحداث الأمنية
+الأمن السيبراني والشبكات (Cyber & IT),SOC,9.5/10,Security Operations Center,مركز العمليات الأمنية
+الأمن السيبراني والشبكات (Cyber & IT),GDPR,10/10,General Data Protection Regulation,اللائحة العامة لحماية البيانات
+الأمن السيبراني والشبكات (Cyber & IT),CCPA,9/10,California Consumer Privacy Act,قانون خصوصية المستهلك في كاليفورنيا
+الأمن السيبراني والشبكات (Cyber & IT),XSS,8/10,Cross-Site Scripting,البرمجة عبر المواقع (ثغرة أمنية)
+الأمن السيبراني والشبكات (Cyber & IT),CSRF,8/10,Cross-Site Request Forgery,تزوير الطلب عبر المواقع
+الأمن السيبراني والشبكات (Cyber & IT),SSH,9.5/10,Secure Shell,القشرة الآمنة (بروتوكول شبكة)
+الأمن السيبراني والشبكات (Cyber & IT),FTP,10/10,File Transfer Protocol,بروتوكول نقل الملفات
