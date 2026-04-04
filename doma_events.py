@@ -833,6 +833,11 @@ async def watch_events(app: Application, chat_id: int) -> None:
         current_vip_db = get_vip_database(vip_folder)
         vip_snapshot_lock = asyncio.Lock()
         domain_cursor = 0
+        app.bot_data.setdefault("scan_cycle_counter", 0)
+        app.bot_data.setdefault(
+            "latest_scan_summary",
+            {"domains_checked": 0, "vip_matches": 0, "general_finds": 0},
+        )
 
         async def vip_reload_loop() -> None:
             nonlocal current_vip_db
@@ -882,6 +887,7 @@ async def watch_events(app: Application, chat_id: int) -> None:
                     domain_cursor,
                     limit,
                 )
+                LOGGER.info("Fetching from GoDaddy... domains=%s", len(selected_domains))
 
                 async def check_with_guard(domain: str) -> Optional[DomainOpportunity]:
                     async with scan_semaphore:
@@ -896,6 +902,7 @@ async def watch_events(app: Application, chat_id: int) -> None:
 
                 checks = await asyncio.gather(*(check_with_guard(domain) for domain in selected_domains))
                 opportunities = [op for op in checks if op is not None]
+                LOGGER.info("Fetched %s domains from GoDaddy (available=%s)", len(selected_domains), len(opportunities))
 
                 chat_filters = app.bot_data.get("chat_filters", {})
                 target_chat_ids = {chat_id}
@@ -928,6 +935,9 @@ async def watch_events(app: Application, chat_id: int) -> None:
                     else:
                         non_vip_candidates.append(item)
 
+                vip_sent_count = 0
+                general_sent_count = 0
+
                 for opportunity in vip_candidates:
                     try:
                         vip_record = active_vip_db.get(opportunity.sld)
@@ -936,8 +946,27 @@ async def watch_events(app: Application, chat_id: int) -> None:
                         for target_chat_id in target_chat_ids:
                             if store.has_alerted(target_chat_id, opportunity.domain):
                                 continue
-                            await emit_vip_alert(app, target_chat_id, opportunity, vip_record)
-                            store.mark_alerted(target_chat_id, opportunity.domain, opportunity.source)
+                            try:
+                                await app.bot.send_message(
+                                    chat_id=target_chat_id,
+                                    text=format_vip_alert(opportunity, vip_record),
+                                    parse_mode="HTML",
+                                    disable_web_page_preview=True,
+                                )
+                                store.mark_alerted(target_chat_id, opportunity.domain, opportunity.source)
+                                vip_sent_count += 1
+                                LOGGER.info(
+                                    "VIP Telegram send success chat_id=%s domain=%s",
+                                    target_chat_id,
+                                    opportunity.domain,
+                                )
+                            except Exception as send_exc:
+                                LOGGER.exception(
+                                    "VIP Telegram send failed chat_id=%s domain=%s error=%s",
+                                    target_chat_id,
+                                    opportunity.domain,
+                                    send_exc,
+                                )
                         LOGGER.info("VIP alert sent domain=%s status=%s", opportunity.domain, opportunity.availability_status)
                     except Exception as exc:
                         LOGGER.exception("Failed to send VIP Telegram alert for %s: %s", opportunity.domain, exc)
@@ -949,8 +978,27 @@ async def watch_events(app: Application, chat_id: int) -> None:
                         for target_chat_id in target_chat_ids:
                             if store.has_alerted(target_chat_id, opportunity.domain):
                                 continue
-                            await emit_general_find_alert(app, target_chat_id, opportunity)
-                            store.mark_alerted(target_chat_id, opportunity.domain, opportunity.source)
+                            try:
+                                await app.bot.send_message(
+                                    chat_id=target_chat_id,
+                                    text=format_general_find_alert(opportunity),
+                                    parse_mode="HTML",
+                                    disable_web_page_preview=True,
+                                )
+                                store.mark_alerted(target_chat_id, opportunity.domain, opportunity.source)
+                                general_sent_count += 1
+                                LOGGER.info(
+                                    "General Telegram send success chat_id=%s domain=%s",
+                                    target_chat_id,
+                                    opportunity.domain,
+                                )
+                            except Exception as send_exc:
+                                LOGGER.exception(
+                                    "General Telegram send failed chat_id=%s domain=%s error=%s",
+                                    target_chat_id,
+                                    opportunity.domain,
+                                    send_exc,
+                                )
                         LOGGER.info(
                             "General find alert sent domain=%s ask=$%.2f tld=%s len=%s",
                             opportunity.domain,
@@ -960,6 +1008,13 @@ async def watch_events(app: Application, chat_id: int) -> None:
                         )
                     except Exception as exc:
                         LOGGER.exception("Failed to send General Find alert for %s: %s", opportunity.domain, exc)
+
+                app.bot_data["scan_cycle_counter"] = int(app.bot_data.get("scan_cycle_counter", 0)) + 1
+                app.bot_data["latest_scan_summary"] = {
+                    "domains_checked": len(selected_domains),
+                    "vip_matches": vip_sent_count,
+                    "general_finds": general_sent_count,
+                }
 
                 quota_wait = client.quota_backoff_remaining_seconds()
                 breaker_wait = client.circuit_open_remaining_seconds()
