@@ -857,7 +857,15 @@ async def watch_events(app: Application, chat_id: int) -> None:
             int(summary.get("quota_wait_seconds", 0)),
             int(summary.get("breaker_wait_seconds", 0)),
         )
-        await asyncio.sleep(next_wait)
+        resume_event = app.bot_data.get("watcher_resume_event")
+        if not isinstance(resume_event, asyncio.Event):
+            resume_event = asyncio.Event()
+            app.bot_data["watcher_resume_event"] = resume_event
+        try:
+            await asyncio.wait_for(resume_event.wait(), timeout=next_wait)
+            resume_event.clear()
+        except TimeoutError:
+            pass
 
 
 async def fetch_godaddy_domains(app: Application, chat_id: int) -> dict[str, int]:
@@ -870,9 +878,8 @@ async def fetch_godaddy_domains(app: Application, chat_id: int) -> dict[str, int
         {"domains_checked": 0, "vip_matches": 0, "general_finds": 0},
     )
 
-    store: Optional[AlertStore] = None
+    store = AlertStore(cfg.db_path)
     try:
-        store = AlertStore(cfg.db_path)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             client = GoDaddyClient(session, cfg)
             scan_semaphore = asyncio.Semaphore(cfg.scan_concurrency)
@@ -1034,5 +1041,4 @@ async def fetch_godaddy_domains(app: Application, chat_id: int) -> dict[str, int
             app.bot_data["latest_scan_summary"] = summary
             return summary
     finally:
-        if store is not None:
-            store.close()
+        store.close()

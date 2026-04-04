@@ -218,6 +218,9 @@ async def filter_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def pause_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.application.bot_data["watcher_paused"] = True
+    resume_event = context.application.bot_data.get("watcher_resume_event")
+    if isinstance(resume_event, asyncio.Event):
+        resume_event.set()
     await update.message.reply_text(
         "⏸️ Polling loop paused. Use /resume to continue or /force_scan to run one immediate cycle.",
         parse_mode="HTML",
@@ -226,6 +229,9 @@ async def pause_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.application.bot_data["watcher_paused"] = False
+    resume_event = context.application.bot_data.get("watcher_resume_event")
+    if isinstance(resume_event, asyncio.Event):
+        resume_event.set()
     await update.message.reply_text("▶️ Polling loop resumed.", parse_mode="HTML")
 
 
@@ -334,15 +340,28 @@ def main():
         nonlocal watcher_task
         application.bot_data.setdefault("chat_filters", load_filter_store())
         application.bot_data.setdefault("watcher_paused", False)
-        watcher_task = asyncio.create_task(watch_events(application, DEFAULT_CHAT_ID))
+        application.bot_data.setdefault("watcher_resume_event", asyncio.Event())
+        def _start_watcher() -> asyncio.Task:
+            task = asyncio.create_task(watch_events(application, DEFAULT_CHAT_ID))
+            task.add_done_callback(_watcher_done)
+            return task
+
+        async def _restart_watcher() -> None:
+            nonlocal watcher_task
+            await asyncio.sleep(2)
+            watcher_task = _start_watcher()
+            logging.info("🔄 Background domain watcher restarted")
+
         def _watcher_done(task: asyncio.Task) -> None:
+            nonlocal watcher_task
             try:
                 task.result()
             except asyncio.CancelledError:
                 logging.info("Background domain watcher cancelled")
             except Exception:
                 logging.exception("Background domain watcher crashed")
-        watcher_task.add_done_callback(_watcher_done)
+                watcher_task = asyncio.create_task(_restart_watcher())
+        watcher_task = _start_watcher()
         logging.info("✅ Background domain watcher started")
 
     async def post_shutdown(_application):
