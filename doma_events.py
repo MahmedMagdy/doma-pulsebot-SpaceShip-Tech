@@ -502,23 +502,21 @@ class GoDaddyClient:
                     if response.status == 429:
                         self._note_rate_limit()
                         self._note_retryable_failure()
-                        wait_seconds = self._backoff_seconds(attempt)
                         LOGGER.warning(
                             "%s rate-limited (429) on %s; retrying in %.2fs",
                             context_label,
                             url,
-                            float(STRICT_GODADDY_THROTTLE_SECONDS),
+                            STRICT_GODADDY_THROTTLE_SECONDS,
                         )
                         await asyncio.sleep(STRICT_GODADDY_THROTTLE_SECONDS)
                         continue
                     if 500 <= response.status < 600:
                         self._note_retryable_failure()
-                        wait_seconds = self._backoff_seconds(attempt)
                         LOGGER.warning(
                             "%s upstream status=%s; retrying in %.2fs",
                             context_label,
                             response.status,
-                            float(STRICT_GODADDY_THROTTLE_SECONDS),
+                            STRICT_GODADDY_THROTTLE_SECONDS,
                         )
                         await asyncio.sleep(STRICT_GODADDY_THROTTLE_SECONDS)
                         continue
@@ -535,12 +533,11 @@ class GoDaddyClient:
             except aiohttp.ClientError as exc:
                 last_error = f"{type(exc).__name__}: {exc}"
                 self._note_retryable_failure()
-                wait_seconds = self._backoff_seconds(attempt)
                 LOGGER.info(
                     "%s network error: %s; retrying in %.2fs",
                     context_label,
                     exc,
-                    float(STRICT_GODADDY_THROTTLE_SECONDS),
+                    STRICT_GODADDY_THROTTLE_SECONDS,
                 )
                 await asyncio.sleep(STRICT_GODADDY_THROTTLE_SECONDS)
 
