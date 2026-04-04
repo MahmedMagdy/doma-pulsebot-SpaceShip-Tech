@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import heapq
+import html
 import logging
 import os
 import random
@@ -648,15 +649,20 @@ async def emit_alert(
 
 
 def format_vip_alert(opportunity: DomainOpportunity, vip: VipRecord) -> str:
-    domain = f"{opportunity.sld}.{opportunity.tld.lstrip('.')}"
+    domain = html.escape(f"{opportunity.sld}.{opportunity.tld.lstrip('.')}")
+    status = html.escape(opportunity.availability_status or "N/A")
+    sector = html.escape(vip.sector or "N/A")
+    rating = html.escape(vip.rating or "N/A")
+    meaning_en = html.escape(vip.meaning_en or "N/A")
+    meaning_ar = html.escape(vip.meaning_ar or "N/A")
     return (
-        "🚨 VIP DOMAIN MATCH SPOTTED! 🚨\n"
-        f"🌍 Domain: {domain}\n"
-        f"🟢 Status: {opportunity.availability_status}\n"
-        f"🏢 Sector: {vip.sector or 'N/A'}\n"
-        f"⭐ Rating: {vip.rating or 'N/A'}\n"
-        f"🇬🇧 EN Meaning: {vip.meaning_en or 'N/A'}\n"
-        f"🇦🇪 AR Meaning: {vip.meaning_ar or 'N/A'}"
+        "🚨 <b>VIP DOMAIN MATCH SPOTTED!</b> 🚨\n"
+        f"🌍 <b>Domain:</b> <code>{domain}</code>\n"
+        f"🟢 <b>Status:</b> {status}\n"
+        f"🏢 <b>Sector:</b> {sector}\n"
+        f"⭐ <b>Rating:</b> {rating}\n"
+        f"🇬🇧 <b>EN Meaning:</b> {meaning_en}\n"
+        f"🇦🇪 <b>AR Meaning:</b> {meaning_ar}"
     )
 
 
@@ -672,6 +678,7 @@ async def emit_vip_alert(
     await app.bot.send_message(
         chat_id=chat_id,
         text=format_vip_alert(opportunity, vip),
+        parse_mode=ParseMode.HTML,
         reply_markup=keyboard,
         disable_web_page_preview=True,
     )
