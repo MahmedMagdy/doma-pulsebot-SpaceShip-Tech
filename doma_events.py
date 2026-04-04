@@ -1279,8 +1279,9 @@ async def fetch_spaceship_domains(app: Application, chat_id: int) -> dict[str, i
                         if store.has_alerted(target_chat_id, opportunity.domain):
                             continue
                         try:
-                            await app.bot.send_message(
-                                chat_id=target_chat_id,
+                            await send_telegram_notification(
+                                app=app,
+                                domain_name=opportunity.domain,
                                 text=format_vip_alert(opportunity, vip_record),
                                 parse_mode="HTML",
                                 disable_web_page_preview=True,
@@ -1311,8 +1312,9 @@ async def fetch_spaceship_domains(app: Application, chat_id: int) -> dict[str, i
                         if store.has_alerted(target_chat_id, opportunity.domain):
                             continue
                         try:
-                            await app.bot.send_message(
-                                chat_id=target_chat_id,
+                            await send_telegram_notification(
+                                app=app,
+                                domain_name=opportunity.domain,
                                 text=format_general_find_alert(opportunity),
                                 parse_mode="HTML",
                                 disable_web_page_preview=True,
