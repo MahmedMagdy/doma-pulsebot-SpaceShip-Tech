@@ -92,6 +92,8 @@ APPRAISAL_BATCH_SIZE=10
 APPRAISAL_CONCURRENCY=5
 SCAN_CONCURRENCY=50
 VIP_RELOAD_SECONDS=3600
+GENERAL_FIND_MAX_LENGTH=5
+GENERAL_FIND_TLDS=.com,.ae
 
 # =========================
 # Scheduling (Golden Hours UTC)
@@ -198,5 +200,6 @@ sudo journalctl -u doma-pulsebot -f
 - The watcher now uses **UTC Golden Hours** (`TURBO_HOURS_UTC`) for turbo polling.
 - Same-hour `TURBO_HOURS_UTC` entries (like `18-18`) are auto-converted to a 1-hour window (`18-19`).
 - Outside Golden Hours, it uses eco polling to preserve quotas.
+- Dual strategy is active: strict VIP sniper alerts for exact VIP root + allowed TLD, plus secondary `[General Find]` alerts for non-VIP short clean names in configured high-value TLDs.
 - Requests include full-jitter retry backoff + silent 429 cooldown handling + GoDaddy circuit breaker protection.
 - Keep API keys private and rotate keys if any leak is suspected.

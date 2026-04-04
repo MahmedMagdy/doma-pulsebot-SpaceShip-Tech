@@ -123,6 +123,8 @@ class WatcherConfig:
     human_delay_max_seconds: float = 2.5
     vip_reload_seconds: int = 3600
     scan_concurrency: int = 50
+    general_find_max_length: int = 5
+    general_find_tlds: set[str] = field(default_factory=lambda: {".com", ".ae"})
 
     @classmethod
     def from_env(cls) -> "WatcherConfig":
@@ -147,6 +149,12 @@ class WatcherConfig:
             "gibberish,unbrandable,unpronounceable,nonsense,meaningless,awkward,spammy",
         )
         negative_keywords = {kw.strip().lower() for kw in raw_negative_keywords.split(",") if kw.strip()}
+        raw_general_find_tlds = os.getenv("GENERAL_FIND_TLDS", ".com,.ae")
+        general_find_tlds = {
+            t.strip().lower() if t.strip().startswith(".") else f".{t.strip().lower()}"
+            for t in raw_general_find_tlds.split(",")
+            if t.strip()
+        }
 
         return cls(
             poll_seconds=int(os.getenv("WATCHER_POLL_SECONDS", "30")),
@@ -183,6 +191,8 @@ class WatcherConfig:
             human_delay_max_seconds=delay_max,
             vip_reload_seconds=max(60, int(os.getenv("VIP_RELOAD_SECONDS", "3600"))),
             scan_concurrency=max(1, int(os.getenv("SCAN_CONCURRENCY", "50"))),
+            general_find_max_length=max(1, int(os.getenv("GENERAL_FIND_MAX_LENGTH", "5"))),
+            general_find_tlds=general_find_tlds or {".com", ".ae"},
         )
 
 
@@ -640,6 +650,51 @@ async def emit_alert(
     )
 
 
+def is_general_find_candidate(opportunity: DomainOpportunity, cfg: WatcherConfig) -> bool:
+    sld = opportunity.sld.lower()
+    if not sld:
+        return False
+    if opportunity.tld.lower() not in cfg.general_find_tlds:
+        return False
+    if len(sld) > cfg.general_find_max_length:
+        return False
+    if "-" in sld or any(ch.isdigit() for ch in sld):
+        return False
+    return True
+
+
+def format_general_find_alert(opportunity: DomainOpportunity) -> str:
+    domain = html.escape(opportunity.domain)
+    source = html.escape(opportunity.source)
+    ask = html.escape(f"${opportunity.ask_price_usd:.2f} {opportunity.currency}")
+    return (
+        "🟡 <b>[General Find]</b>\n"
+        "Net strategy candidate (non-VIP quality hit)\n"
+        f"🌐 <b>Domain:</b> <code>{domain}</code>\n"
+        f"🏪 <b>Source:</b> {source}\n"
+        f"💵 <b>Asking Price:</b> {ask}\n"
+        f"🔗 <b>Listing:</b> {html.escape(opportunity.listing_url)}"
+    )
+
+
+async def emit_general_find_alert(
+    app: Application,
+    chat_id: int,
+    opportunity: DomainOpportunity,
+) -> None:
+    buy_url = f"https://www.godaddy.com/domainsearch/find?domainToCheck={opportunity.domain}"
+    rows = [[InlineKeyboardButton("🛒 Review on GoDaddy", url=buy_url)]]
+    rows.append([InlineKeyboardButton("📊 Whois", url=opportunity.whois_url)])
+    keyboard = InlineKeyboardMarkup(rows)
+    await app.bot.send_message(
+        chat_id=chat_id,
+        text=format_general_find_alert(opportunity),
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
+
+
 def format_vip_alert(opportunity: DomainOpportunity, vip: VipRecord) -> str:
     domain = html.escape(f"{opportunity.sld}.{opportunity.tld.lstrip('.')}")
     status = html.escape(opportunity.availability_status or "N/A")
@@ -887,41 +942,24 @@ async def watch_events(app: Application, chat_id: int) -> None:
                     except Exception as exc:
                         LOGGER.exception("Failed to send VIP Telegram alert for %s: %s", opportunity.domain, exc)
 
-                async def evaluate_with_guard(
-                    candidate: DomainOpportunity,
-                ) -> tuple[DomainOpportunity, Optional[ValuationResult]]:
-                    async with scan_semaphore:
-                        try:
-                            valuation = await evaluate_opportunity(candidate, cfg)
-                            return candidate, valuation
-                        except Exception as exc:
-                            LOGGER.exception("Failed to evaluate %s: %s", candidate.domain, exc)
-                            return candidate, None
-
-                evaluated = await asyncio.gather(*(evaluate_with_guard(item) for item in non_vip_candidates))
-
-                for opportunity, valuation in evaluated:
-                    if valuation is None or not valuation.is_high_margin:
+                for opportunity in non_vip_candidates:
+                    if not is_general_find_candidate(opportunity, cfg):
                         continue
                     try:
                         for target_chat_id in target_chat_ids:
                             if store.has_alerted(target_chat_id, opportunity.domain):
                                 continue
-                            filters = chat_filters.get(str(target_chat_id), {})
-                            if not _chat_filter_matches(opportunity, valuation, filters):
-                                continue
-                            await emit_alert(app, target_chat_id, opportunity, valuation)
+                            await emit_general_find_alert(app, target_chat_id, opportunity)
                             store.mark_alerted(target_chat_id, opportunity.domain, opportunity.source)
                         LOGGER.info(
-                            "Alert sent domain=%s ask=$%.2f estimate=$%.2f method=%s brandability=%s",
+                            "General find alert sent domain=%s ask=$%.2f tld=%s len=%s",
                             opportunity.domain,
                             opportunity.ask_price_usd,
-                            valuation.estimated_value_usd,
-                            valuation.method,
-                            valuation.brandability_score,
+                            opportunity.tld,
+                            len(opportunity.sld),
                         )
                     except Exception as exc:
-                        LOGGER.exception("Failed to send Telegram alert for %s: %s", opportunity.domain, exc)
+                        LOGGER.exception("Failed to send General Find alert for %s: %s", opportunity.domain, exc)
 
                 quota_wait = client.quota_backoff_remaining_seconds()
                 breaker_wait = client.circuit_open_remaining_seconds()
