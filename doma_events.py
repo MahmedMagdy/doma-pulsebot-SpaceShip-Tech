@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import email.utils
 import heapq
 import html
 import logging
@@ -321,11 +322,16 @@ def parse_float(value: Any) -> Optional[float]:
 
 
 def _normalize_price(raw_price: Any) -> Optional[float]:
-    """Parse and normalise an arbitrary price value to a positive USD float."""
+    """
+    Parse and normalise an arbitrary price value to a non-negative USD float.
+
+    Returns None only when the value is unparseable or negative.
+    Zero is a valid price (free domain promotions) and is preserved as 0.0.
+    """
     parsed = parse_float(raw_price)
     if parsed is None:
         return None
-    return round(parsed, 2) if parsed > 0 else None
+    return round(parsed, 2) if parsed >= 0 else None
 
 
 def score_with_internal_rules(domain: str, cfg: WatcherConfig) -> tuple[float, float, str]:
@@ -552,18 +558,27 @@ class SpaceshipClient:
 
                     if response.status == 429:
                         # ── Mandatory 429 handling ──────────────────────────
-                        # 1. Read Retry-After header (seconds as int/float).
-                        # 2. Fallback to exponential back-off if header absent.
+                        # RFC 7231 allows Retry-After to be either:
+                        #   • An integer: number of seconds to wait
+                        #   • An HTTP-date string: e.g. "Sat, 05 Apr 2025 12:00:00 GMT"
+                        # We handle both formats; fall back to exponential
+                        # back-off when the header is absent or unparseable.
                         self._note_rate_limit()
                         self._note_retryable_failure()
                         retry_after_raw = response.headers.get("Retry-After")
+                        wait_seconds: float = self._backoff_seconds(attempt)
                         if retry_after_raw:
                             try:
+                                # Try seconds (integer/float) first
                                 wait_seconds = float(retry_after_raw)
                             except ValueError:
-                                wait_seconds = self._backoff_seconds(attempt)
-                        else:
-                            wait_seconds = self._backoff_seconds(attempt)
+                                # Fall back to RFC 7231 HTTP-date parsing
+                                try:
+                                    parsed_date = email.utils.parsedate_to_datetime(retry_after_raw)
+                                    delta = (parsed_date - datetime.now(timezone.utc)).total_seconds()
+                                    wait_seconds = max(0.0, delta)
+                                except Exception:
+                                    wait_seconds = self._backoff_seconds(attempt)
                         LOGGER.warning(
                             "%s rate-limited (429) on %s; pausing %.2fs before retry (attempt %s/%s)",
                             context_label,
@@ -593,6 +608,9 @@ class SpaceshipClient:
                         raise RuntimeError(
                             f"{context_label} failed status={response.status} body={body[:300]}"
                         )
+                        # Note: Spaceship returns 200 for availability checks.
+                        # 201 (Created) is accepted defensively for any future
+                        # Spaceship endpoint variants that follow REST conventions.
 
                     try:
                         payload = await response.json(content_type=None)
@@ -708,7 +726,12 @@ def _extract_results_list(payload: Any) -> Optional[list]:
 
     Spaceship may return either:
       - A top-level JSON array:  [{"domain": ..., "available": ...}, ...]
-      - A wrapped object:        {"results": [...]}   or   {"domains": [...]}
+      - A wrapped object with any of these keys:
+          "results"  – primary documented key
+          "domains"  – alternate documented key
+          "data"     – common REST envelope pattern
+          "items"    – common pagination envelope pattern
+    Returns None if no recognisable list structure is found.
     """
     if isinstance(payload, list):
         return payload
@@ -724,26 +747,44 @@ def _parse_domain_item(item: dict, fallback_domain: str) -> Optional["DomainOppo
     """
     Convert a single Spaceship domain-check result dict into a DomainOpportunity.
 
-    Spaceship price may arrive in several shapes:
-      • Flat float/string:          "price": 12.99
-      • Nested purchase price dict: "purchasePrice": {"value": "12.99", "currency": "USD"}
-      • Nested "price" dict:        "price": {"listPrice": 12.99, "currency": "USD"}
+    Price extraction order (first non-None/non-negative value wins):
+      1. Flat scalar:              "price": 12.99
+      2. Nested "price" dict keys (in order): "listPrice", "yourPrice", "value"
+      3. Nested "purchasePrice" dict keys:     "value", "amount", "listPrice"
+
+    If no valid price is found, DEFAULT_FALLBACK_ASK_PRICE_USD is used.
+    A price of 0.0 (free domain promotion) is preserved as-is.
     """
     normalized_domain = str(item.get("domain") or fallback_domain).strip().lower()
     if not normalized_domain or "." not in normalized_domain:
         return None
 
-    # Extract price from whichever shape Spaceship sends
+    # Extract price from whichever shape Spaceship sends (see docstring for priority order)
     raw_price: Any = item.get("price")
     if isinstance(raw_price, dict):
-        raw_price = raw_price.get("listPrice") or raw_price.get("yourPrice") or raw_price.get("value")
+        # Nested "price" dict: try "listPrice" → "yourPrice" → "value"
+        raw_price = (
+            raw_price.get("listPrice")
+            if raw_price.get("listPrice") is not None
+            else raw_price.get("yourPrice")
+            if raw_price.get("yourPrice") is not None
+            else raw_price.get("value")
+        )
 
     purchase_price = item.get("purchasePrice")
     if isinstance(purchase_price, dict) and raw_price is None:
-        raw_price = purchase_price.get("value") or purchase_price.get("amount") or purchase_price.get("listPrice")
+        # Nested "purchasePrice" dict: try "value" → "amount" → "listPrice"
+        raw_price = (
+            purchase_price.get("value")
+            if purchase_price.get("value") is not None
+            else purchase_price.get("amount")
+            if purchase_price.get("amount") is not None
+            else purchase_price.get("listPrice")
+        )
 
     ask_price = _normalize_price(raw_price)
-    if ask_price is None or ask_price <= 0:
+    if ask_price is None:
+        # Price is missing or unparseable — use the configured fallback
         LOGGER.warning(
             "Spaceship price missing/invalid for %s; using fallback ask price $%.2f",
             normalized_domain,
