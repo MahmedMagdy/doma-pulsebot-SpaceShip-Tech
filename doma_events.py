@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import heapq
 import logging
 import os
@@ -14,7 +15,7 @@ import aiohttp
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import Application
-from vip_database import VipRecord, get_vip_database
+from vip_database import VipRecord, get_vip_database, reload_vip_database
 
 LOGGER = logging.getLogger(__name__)
 SPECIAL_CHARS = r"_*[]()~`>#+-=|{}.!"
@@ -136,6 +137,8 @@ class WatcherConfig:
     proxy_url: str = ""
     human_delay_min_seconds: float = 0.8
     human_delay_max_seconds: float = 2.5
+    vip_reload_seconds: int = 3600
+    scan_concurrency: int = 50
 
     @classmethod
     def from_env(cls) -> "WatcherConfig":
@@ -208,6 +211,8 @@ class WatcherConfig:
             proxy_url=os.getenv("PROXY_URL", "").strip(),
             human_delay_min_seconds=delay_min,
             human_delay_max_seconds=delay_max,
+            vip_reload_seconds=max(60, int(os.getenv("VIP_RELOAD_SECONDS", "3600"))),
+            scan_concurrency=max(1, int(os.getenv("SCAN_CONCURRENCY", "50"))),
         )
 
 
@@ -1088,7 +1093,20 @@ async def watch_events(app: Application, chat_id: int) -> None:
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
         client = AtomClient(session, cfg)
-        appraisal_semaphore = asyncio.Semaphore(cfg.appraisal_concurrency)
+        appraisal_semaphore = asyncio.Semaphore(min(cfg.appraisal_concurrency, cfg.scan_concurrency))
+        scan_semaphore = asyncio.Semaphore(cfg.scan_concurrency)
+        vip_folder = Path(__file__).with_name("vip_data")
+
+        async def vip_reload_loop() -> None:
+            while True:
+                await asyncio.sleep(cfg.vip_reload_seconds)
+                try:
+                    refreshed = reload_vip_database(vip_folder)
+                    LOGGER.info("VIP DB reloaded entries=%s", len(refreshed))
+                except Exception as exc:
+                    LOGGER.warning("VIP DB reload failed: %s", exc)
+
+        vip_reload_task = asyncio.create_task(vip_reload_loop())
 
         try:
             while True:
@@ -1153,74 +1171,80 @@ async def watch_events(app: Application, chat_id: int) -> None:
                             LOGGER.exception("Failed to evaluate %s: %s", candidate.domain, exc)
                             return candidate, None
 
-                for idx in range(0, len(candidates), cfg.appraisal_batch_size):
-                    batch = candidates[idx : idx + cfg.appraisal_batch_size]
-                    vip_candidates: list[DomainOpportunity] = []
-                    non_vip_candidates: list[DomainOpportunity] = []
-                    for item in batch:
-                        root_word = item.sld.lower()
-                        tld = item.tld.lower()
-                        vip_match = (
-                            tld in cfg.allowed_tlds
-                            and root_word in vip_db
-                        )
-                        if vip_match:
-                            vip_candidates.append(item)
-                        else:
-                            non_vip_candidates.append(item)
+                current_vip_db = get_vip_database(vip_folder)
+                vip_candidates: list[DomainOpportunity] = []
+                non_vip_candidates: list[DomainOpportunity] = []
+                for item in candidates:
+                    root_word = item.sld.lower()
+                    tld = item.tld.lower()
+                    vip_match = tld in cfg.allowed_tlds and root_word in current_vip_db
+                    if vip_match:
+                        vip_candidates.append(item)
+                    else:
+                        non_vip_candidates.append(item)
 
-                    for opportunity in vip_candidates:
-                        try:
-                            vip_record = vip_db.get(opportunity.sld)
-                            if vip_record is None:
+                for opportunity in vip_candidates:
+                    try:
+                        vip_record = current_vip_db.get(opportunity.sld)
+                        if vip_record is None:
+                            continue
+                        for target_chat_id in target_chat_ids:
+                            if store.has_alerted(target_chat_id, opportunity.domain):
                                 continue
-                            for target_chat_id in target_chat_ids:
-                                if store.has_alerted(target_chat_id, opportunity.domain):
-                                    continue
-                                await emit_vip_alert(app, target_chat_id, opportunity, vip_record, cfg)
-                                store.mark_alerted(target_chat_id, opportunity.domain, opportunity.source)
-                            LOGGER.info("VIP alert sent domain=%s status=%s", opportunity.domain, opportunity.availability_status)
-                        except Exception as exc:
-                            LOGGER.exception("Failed to send VIP Telegram alert for %s: %s", opportunity.domain, exc)
+                            await emit_vip_alert(app, target_chat_id, opportunity, vip_record, cfg)
+                            store.mark_alerted(target_chat_id, opportunity.domain, opportunity.source)
+                        LOGGER.info("VIP alert sent domain=%s status=%s", opportunity.domain, opportunity.availability_status)
+                    except Exception as exc:
+                        LOGGER.exception("Failed to send VIP Telegram alert for %s: %s", opportunity.domain, exc)
 
-                    evaluated = await asyncio.gather(*(evaluate_with_guard(item) for item in non_vip_candidates))
-
-                    for opportunity, valuation in evaluated:
-                        if valuation is None or not valuation.is_high_margin:
-                            continue
-
+                async def evaluate_with_scan_guard(
+                    candidate: DomainOpportunity,
+                ) -> tuple[DomainOpportunity, Optional[ValuationResult]]:
+                    async with scan_semaphore:
                         try:
-                            passes_trademark = await client.passes_trademark_filter(opportunity.domain)
+                            return await evaluate_with_guard(candidate)
                         except Exception as exc:
-                            LOGGER.warning(
-                                "Trademark filter error for %s - bypassing filter: %s",
-                                opportunity.domain,
-                                exc,
-                            )
-                            passes_trademark = True
-                        if not passes_trademark:
-                            LOGGER.info("Trademark filter blocked domain=%s", opportunity.domain)
-                            continue
+                            LOGGER.exception("Failed to evaluate %s: %s", candidate.domain, exc)
+                            return candidate, None
 
-                        try:
-                            for target_chat_id in target_chat_ids:
-                                if store.has_alerted(target_chat_id, opportunity.domain):
-                                    continue
-                                filters = chat_filters.get(str(target_chat_id), {})
-                                if not _chat_filter_matches(opportunity, valuation, filters):
-                                    continue
-                                await emit_alert(app, target_chat_id, opportunity, valuation, cfg)
-                                store.mark_alerted(target_chat_id, opportunity.domain, opportunity.source)
-                            LOGGER.info(
-                                "Alert sent domain=%s ask=$%.2f estimate=$%.2f method=%s brandability=%s",
-                                opportunity.domain,
-                                opportunity.ask_price_usd,
-                                valuation.estimated_value_usd,
-                                valuation.method,
-                                valuation.brandability_score,
-                            )
-                        except Exception as exc:
-                            LOGGER.exception("Failed to send Telegram alert for %s: %s", opportunity.domain, exc)
+                evaluated = await asyncio.gather(*(evaluate_with_scan_guard(item) for item in non_vip_candidates))
+
+                for opportunity, valuation in evaluated:
+                    if valuation is None or not valuation.is_high_margin:
+                        continue
+
+                    try:
+                        passes_trademark = await client.passes_trademark_filter(opportunity.domain)
+                    except Exception as exc:
+                        LOGGER.warning(
+                            "Trademark filter error for %s - bypassing filter: %s",
+                            opportunity.domain,
+                            exc,
+                        )
+                        passes_trademark = True
+                    if not passes_trademark:
+                        LOGGER.info("Trademark filter blocked domain=%s", opportunity.domain)
+                        continue
+
+                    try:
+                        for target_chat_id in target_chat_ids:
+                            if store.has_alerted(target_chat_id, opportunity.domain):
+                                continue
+                            filters = chat_filters.get(str(target_chat_id), {})
+                            if not _chat_filter_matches(opportunity, valuation, filters):
+                                continue
+                            await emit_alert(app, target_chat_id, opportunity, valuation, cfg)
+                            store.mark_alerted(target_chat_id, opportunity.domain, opportunity.source)
+                        LOGGER.info(
+                            "Alert sent domain=%s ask=$%.2f estimate=$%.2f method=%s brandability=%s",
+                            opportunity.domain,
+                            opportunity.ask_price_usd,
+                            valuation.estimated_value_usd,
+                            valuation.method,
+                            valuation.brandability_score,
+                        )
+                    except Exception as exc:
+                        LOGGER.exception("Failed to send Telegram alert for %s: %s", opportunity.domain, exc)
 
                 quota_wait = client.quota_backoff_remaining_seconds()
                 breaker_wait = client.circuit_open_remaining_seconds()
@@ -1250,4 +1274,7 @@ async def watch_events(app: Application, chat_id: int) -> None:
             LOGGER.info("Atom watcher cancelled.")
             raise
         finally:
+            vip_reload_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await vip_reload_task
             store.close()

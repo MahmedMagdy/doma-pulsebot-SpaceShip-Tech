@@ -95,6 +95,8 @@ NEGATIVE_KEYWORDS=gibberish,unbrandable,unpronounceable,nonsense,meaningless,awk
 APPRAISAL_CACHE_TTL_SECONDS=86400
 APPRAISAL_BATCH_SIZE=10
 APPRAISAL_CONCURRENCY=5
+SCAN_CONCURRENCY=50
+VIP_RELOAD_SECONDS=3600
 
 # =========================
 # Scheduling (Golden Hours UTC)

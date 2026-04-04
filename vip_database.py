@@ -48,7 +48,7 @@ def load_vip_database(folder: Path) -> dict[str, VipRecord]:
         LOGGER.warning("VIP data folder missing: %s", folder)
         return records
 
-    csv_paths = sorted(folder.glob("DOM*.[cC][sS][vV]"))
+    csv_paths = sorted(folder.glob("*.[cC][sS][vV]"))
     if not csv_paths:
         LOGGER.warning("No VIP CSV files found in: %s", folder)
         return records
@@ -164,9 +164,17 @@ def load_vip_database(folder: Path) -> dict[str, VipRecord]:
     return records
 
 
+def reload_vip_database(folder: Path) -> dict[str, VipRecord]:
+    global VIP_DATA_CACHE
+    fresh_records = load_vip_database(folder)
+    with VIP_DATA_LOCK:
+        VIP_DATA_CACHE = fresh_records
+        return dict(VIP_DATA_CACHE)
+
+
 def get_vip_database(folder: Path) -> dict[str, VipRecord]:
     global VIP_DATA_CACHE
     with VIP_DATA_LOCK:
         if not VIP_DATA_CACHE:
             VIP_DATA_CACHE = load_vip_database(folder)
-    return VIP_DATA_CACHE
+        return dict(VIP_DATA_CACHE)
