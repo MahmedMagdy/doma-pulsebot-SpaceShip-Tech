@@ -233,13 +233,41 @@ async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def force_scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     force_scan_event = context.application.bot_data.get("force_scan_event")
     if force_scan_event is None:
         force_scan_event = asyncio.Event()
         context.application.bot_data["force_scan_event"] = force_scan_event
+
+    start_cycle = int(context.application.bot_data.get("scan_cycle_counter", 0))
     force_scan_event.set()
-    await update.message.reply_text(
-        "🚨 Forced scan queued. Running immediate GoDaddy fetch + evaluation.",
+
+    await update.message.reply_text("🚨 Forced scan started. Waiting for GoDaddy fetch to finish...", parse_mode="HTML")
+
+    timeout_seconds = 180
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds
+    while loop.time() < deadline:
+        current_cycle = int(context.application.bot_data.get("scan_cycle_counter", 0))
+        latest_summary = context.application.bot_data.get("latest_scan_summary", {})
+        if current_cycle > start_cycle:
+            checked = int(latest_summary.get("domains_checked", 0))
+            vip = int(latest_summary.get("vip_matches", 0))
+            general = int(latest_summary.get("general_finds", 0))
+            summary_text = (
+                "✅ <b>Scan Complete!</b>\n"
+                f"🔍 Domains Checked: {checked}\n"
+                f"👑 VIP Matches: {vip}\n"
+                f"🌐 General Finds: {general}"
+            )
+            await context.bot.send_message(chat_id=chat_id, text=summary_text, parse_mode="HTML")
+            return
+        await asyncio.sleep(0.5)
+
+    logging.warning("Force scan summary timeout (%ss) for chat_id=%s", timeout_seconds, chat_id)
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="❌ <b>Scan Timeout</b>\nNo completed GoDaddy cycle was detected in time.",
         parse_mode="HTML",
     )
 
