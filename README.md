@@ -67,15 +67,10 @@ DEFAULT_CHAT_ID=YOUR_TELEGRAM_CHAT_ID
 # =========================
 # Official Domain Data Sources
 # =========================
-# Replace with your actual Atom partnership endpoint.
-ATOM_PARTNERSHIP_API_URL=https://api.example.com/partnership/domains
-ATOM_API_KEY=YOUR_ATOM_API_KEY
-ATOM_USER_ID=YOUR_ATOM_USER_ID
-
-# AI appraisal API
-# Replace with your actual Atom appraisal endpoint.
-ATOM_APPRAISAL_API_URL=https://api.example.com/appraisal
-ATOM_APPRAISAL_KEY=YOUR_ATOM_APPRAISAL_KEY
+GODADDY_API_BASE_URL=https://api.godaddy.com
+GODADDY_API_KEY=YOUR_GODADDY_API_KEY
+GODADDY_API_SECRET=YOUR_GODADDY_API_SECRET
+GODADDY_CHECK_TYPE=FAST
 
 # =========================
 # Watcher Filters
@@ -203,5 +198,5 @@ sudo journalctl -u doma-pulsebot -f
 - The watcher now uses **UTC Golden Hours** (`TURBO_HOURS_UTC`) for turbo polling.
 - Same-hour `TURBO_HOURS_UTC` entries (like `18-18`) are auto-converted to a 1-hour window (`18-19`).
 - Outside Golden Hours, it uses eco polling to preserve quotas.
-- Requests include full-jitter retry backoff + silent 429 cooldown handling + Atom circuit breaker protection.
+- Requests include full-jitter retry backoff + silent 429 cooldown handling + GoDaddy circuit breaker protection.
 - Keep API keys private and rotate keys if any leak is suspected.

@@ -187,7 +187,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/stats — Show watcher schedule status\n"
         "/pause — Pause polling loop (save API quota)\n"
         "/resume — Resume polling loop\n"
-        "/force_scan — Force immediate Atom scan/evaluation",
+        "/force_scan — Force immediate GoDaddy scan/evaluation",
         parse_mode="Markdown",
     )
 
@@ -234,7 +234,7 @@ async def force_scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         force_scan_event = asyncio.Event()
         context.application.bot_data["force_scan_event"] = force_scan_event
     force_scan_event.set()
-    await update.message.reply_text("🚨 Forced scan queued. Running immediate Atom fetch + evaluation.")
+    await update.message.reply_text("🚨 Forced scan queued. Running immediate GoDaddy fetch + evaluation.")
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
