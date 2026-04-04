@@ -1169,10 +1169,13 @@ async def watch_events(app: Application, chat_id: int) -> None:
 
                     for opportunity in vip_candidates:
                         try:
+                            vip_record = vip_db.get(opportunity.sld)
+                            if vip_record is None:
+                                continue
                             for target_chat_id in target_chat_ids:
                                 if store.has_alerted(target_chat_id, opportunity.domain):
                                     continue
-                                await emit_vip_alert(app, target_chat_id, opportunity, vip_db[opportunity.sld], cfg)
+                                await emit_vip_alert(app, target_chat_id, opportunity, vip_record, cfg)
                                 store.mark_alerted(target_chat_id, opportunity.domain, opportunity.source)
                             LOGGER.info("VIP alert sent domain=%s status=%s", opportunity.domain, opportunity.availability_status)
                         except Exception as exc:

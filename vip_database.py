@@ -71,6 +71,11 @@ def load_vip_database(folder: Path) -> dict[str, VipRecord]:
                         continue
 
                     if abbreviation in records:
+                        LOGGER.warning(
+                            "Duplicate VIP abbreviation '%s' in %s; keeping first occurrence",
+                            abbreviation,
+                            csv_path.name,
+                        )
                         continue
 
                     records[abbreviation] = VipRecord(
