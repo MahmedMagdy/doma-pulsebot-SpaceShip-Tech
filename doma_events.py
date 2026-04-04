@@ -28,6 +28,7 @@ MIN_QUOTA_COOLDOWN_SECONDS = 30
 MIN_CIRCUIT_BREAKER_SECONDS = 30
 GODADDY_PRICE_MICROS_THRESHOLD = 100000
 DEFAULT_FALLBACK_ASK_PRICE_USD = 10.0
+WATCHER_ERROR_RETRY_SECONDS = 5
 
 
 class GoDaddyCircuitOpenError(Exception):
@@ -485,6 +486,7 @@ class GoDaddyClient:
         for attempt in range(1, self.cfg.max_retry_attempts + 1):
             await self._humanized_delay()
             try:
+                print(">> CONTACTING GODADDY API NOW <<<")
                 async with self.session.request(
                     method,
                     url,
@@ -811,8 +813,6 @@ def select_circular_batch(items: list[str], cursor: int, batch_size: int) -> tup
 async def watch_events(app: Application, chat_id: int) -> None:
     cfg = WatcherConfig.from_env()
     validate_required_godaddy_config(cfg)
-    store = AlertStore(cfg.db_path)
-    timeout = aiohttp.ClientTimeout(total=cfg.request_timeout_seconds)
 
     LOGGER.info(
         "Starting GoDaddy watcher (default_poll=%ss, eco=%ss, turbo=%ss, turbo_hours=%s, api_base=%s, proxy=%s, delay=%.2f-%.2fs)",
@@ -826,225 +826,219 @@ async def watch_events(app: Application, chat_id: int) -> None:
         cfg.human_delay_max_seconds,
     )
 
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        client = GoDaddyClient(session, cfg)
-        scan_semaphore = asyncio.Semaphore(cfg.scan_concurrency)
-        vip_folder = Path(__file__).with_name("vip_data")
-        current_vip_db = get_vip_database(vip_folder)
-        vip_snapshot_lock = asyncio.Lock()
-        domain_cursor = 0
-        app.bot_data.setdefault("scan_cycle_counter", 0)
-        app.bot_data.setdefault(
-            "latest_scan_summary",
-            {"domains_checked": 0, "vip_matches": 0, "general_finds": 0},
-        )
-
-        async def vip_reload_loop() -> None:
-            nonlocal current_vip_db
-            while True:
-                try:
-                    refreshed = reload_vip_database(vip_folder)
-                    async with vip_snapshot_lock:
-                        current_vip_db = refreshed
-                    LOGGER.info("VIP DB reloaded entries=%s", len(refreshed))
-                except Exception as exc:
-                    LOGGER.warning("VIP DB reload failed: %s", exc)
-                await asyncio.sleep(cfg.vip_reload_seconds)
-
-        vip_reload_task = asyncio.create_task(vip_reload_loop())
-
+    while True:
+        if bool(app.bot_data.get("watcher_paused", False)):
+            await asyncio.sleep(1)
+            continue
+        now_utc = datetime.now(timezone.utc)
+        in_turbo = is_turbo_hour(now_utc, cfg)
+        poll_seconds = current_poll_seconds(now_utc, cfg)
         try:
-            while True:
-                force_scan_event = app.bot_data.get("force_scan_event")
-                if not isinstance(force_scan_event, asyncio.Event):
-                    force_scan_event = asyncio.Event()
-                    app.bot_data["force_scan_event"] = force_scan_event
-
-                force_scan_run = False
-                if bool(app.bot_data.get("watcher_paused", False)):
-                    LOGGER.info("Watcher paused; waiting for /resume or /force_scan trigger.")
-                    await force_scan_event.wait()
-                    force_scan_event.clear()
-                    force_scan_run = True
-                    LOGGER.info("Pause override trigger received; running immediate cycle.")
-
-                now_utc = datetime.now(timezone.utc)
-                in_turbo = is_turbo_hour(now_utc, cfg)
-                poll_seconds = current_poll_seconds(now_utc, cfg)
-
-                async with vip_snapshot_lock:
-                    active_vip_db = dict(current_vip_db)
-
-                candidate_domains = build_candidate_domains(active_vip_db, cfg)
-                if not candidate_domains:
-                    LOGGER.info("No candidate domains built this cycle.")
-                    await asyncio.sleep(poll_seconds)
-                    continue
-
-                limit = min(cfg.max_domains_per_cycle, len(candidate_domains))
-                selected_domains, domain_cursor = select_circular_batch(
-                    candidate_domains,
-                    domain_cursor,
-                    limit,
-                )
-                LOGGER.info("Fetching from GoDaddy: domains=%s", len(selected_domains))
-
-                async def check_with_guard(domain: str) -> Optional[DomainOpportunity]:
-                    async with scan_semaphore:
-                        try:
-                            return await client.check_domain_availability(domain)
-                        except GoDaddyCircuitOpenError as exc:
-                            LOGGER.info("%s", exc)
-                            return None
-                        except Exception as exc:
-                            LOGGER.warning("Availability check failed for %s: %s", domain, exc)
-                            return None
-
-                checks = await asyncio.gather(*(check_with_guard(domain) for domain in selected_domains))
-                opportunities = [op for op in checks if op is not None]
-                LOGGER.info("Fetched %s domains from GoDaddy (available=%s)", len(selected_domains), len(opportunities))
-
-                chat_filters = app.bot_data.get("chat_filters", {})
-                target_chat_ids = {chat_id}
-                target_chat_ids.update(_parse_chat_id_keys(chat_filters))
-
-                priority_heap: list[tuple[float, str, DomainOpportunity]] = []
-                for opportunity in opportunities:
-                    heapq.heappush(
-                        priority_heap,
-                        (
-                            -priority_score(opportunity.domain, cfg, active_vip_db),
-                            opportunity.domain,
-                            opportunity,
-                        ),
-                    )
-
-                candidates: list[DomainOpportunity] = []
-                while priority_heap:
-                    _, _, opportunity = heapq.heappop(priority_heap)
-                    candidates.append(opportunity)
-
-                vip_candidates: list[DomainOpportunity] = []
-                non_vip_candidates: list[DomainOpportunity] = []
-                for item in candidates:
-                    root_word = item.sld.lower()
-                    tld = item.tld.lower()
-                    vip_match = tld in cfg.allowed_tlds and root_word in active_vip_db
-                    if vip_match:
-                        vip_candidates.append(item)
-                    else:
-                        non_vip_candidates.append(item)
-
-                vip_match_count = 0
-                general_match_count = 0
-
-                for opportunity in vip_candidates:
-                    try:
-                        vip_record = active_vip_db.get(opportunity.sld)
-                        if vip_record is None:
-                            continue
-                        vip_match_count += 1
-                        for target_chat_id in target_chat_ids:
-                            if store.has_alerted(target_chat_id, opportunity.domain):
-                                continue
-                            try:
-                                await app.bot.send_message(
-                                    chat_id=target_chat_id,
-                                    text=format_vip_alert(opportunity, vip_record),
-                                    parse_mode="HTML",
-                                    disable_web_page_preview=True,
-                                )
-                                store.mark_alerted(target_chat_id, opportunity.domain, opportunity.source)
-                                LOGGER.info(
-                                    "VIP Telegram send success chat_id=%s domain=%s",
-                                    target_chat_id,
-                                    opportunity.domain,
-                                )
-                            except Exception as send_exc:
-                                LOGGER.exception(
-                                    "VIP Telegram send failed chat_id=%s domain=%s error=%s",
-                                    target_chat_id,
-                                    opportunity.domain,
-                                    send_exc,
-                                )
-                        LOGGER.info("VIP alert sent domain=%s status=%s", opportunity.domain, opportunity.availability_status)
-                    except Exception as exc:
-                        LOGGER.exception("Failed to send VIP Telegram alert for %s: %s", opportunity.domain, exc)
-
-                for opportunity in non_vip_candidates:
-                    if not is_general_find_candidate(opportunity, cfg):
-                        continue
-                    try:
-                        general_match_count += 1
-                        for target_chat_id in target_chat_ids:
-                            if store.has_alerted(target_chat_id, opportunity.domain):
-                                continue
-                            try:
-                                await app.bot.send_message(
-                                    chat_id=target_chat_id,
-                                    text=format_general_find_alert(opportunity),
-                                    parse_mode="HTML",
-                                    disable_web_page_preview=True,
-                                )
-                                store.mark_alerted(target_chat_id, opportunity.domain, opportunity.source)
-                                LOGGER.info(
-                                    "General Telegram send success chat_id=%s domain=%s",
-                                    target_chat_id,
-                                    opportunity.domain,
-                                )
-                            except Exception as send_exc:
-                                LOGGER.exception(
-                                    "General Telegram send failed chat_id=%s domain=%s error=%s",
-                                    target_chat_id,
-                                    opportunity.domain,
-                                    send_exc,
-                                )
-                        LOGGER.info(
-                            "General find alert sent domain=%s ask=$%.2f tld=%s len=%s",
-                            opportunity.domain,
-                            opportunity.ask_price_usd,
-                            opportunity.tld,
-                            len(opportunity.sld),
-                        )
-                    except Exception as exc:
-                        LOGGER.exception("Failed to send General Find alert for %s: %s", opportunity.domain, exc)
-
-                app.bot_data["scan_cycle_counter"] = int(app.bot_data.get("scan_cycle_counter", 0)) + 1
-                app.bot_data["latest_scan_summary"] = {
-                    "domains_checked": len(selected_domains),
-                    "vip_matches": vip_match_count,
-                    "general_finds": general_match_count,
-                }
-
-                quota_wait = client.quota_backoff_remaining_seconds()
-                breaker_wait = client.circuit_open_remaining_seconds()
-                next_wait = max(poll_seconds, quota_wait, breaker_wait)
-                LOGGER.info(
-                    "Cycle complete mode=%s checked=%s opportunities=%s next_poll=%ss quota_wait=%ss breaker_wait=%ss",
-                    "turbo" if in_turbo else "eco",
-                    len(selected_domains),
-                    len(opportunities),
-                    poll_seconds,
-                    quota_wait,
-                    breaker_wait,
-                )
-                if force_scan_run:
-                    continue
-                if bool(app.bot_data.get("watcher_paused", False)):
-                    LOGGER.info("Watcher set to paused after cycle; waiting for trigger.")
-                    continue
-
-                try:
-                    await asyncio.wait_for(force_scan_event.wait(), timeout=next_wait)
-                    force_scan_event.clear()
-                    LOGGER.info("Force scan command received; running next cycle immediately.")
-                except TimeoutError:
-                    pass
+            summary = await fetch_godaddy_domains(app, chat_id)
         except asyncio.CancelledError:
             LOGGER.info("GoDaddy watcher cancelled.")
             raise
-        finally:
-            vip_reload_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await vip_reload_task
-            store.close()
+        except Exception as exc:
+            LOGGER.exception("GoDaddy watcher cycle failed: %s", exc)
+            await asyncio.sleep(WATCHER_ERROR_RETRY_SECONDS)
+            continue
+
+        next_wait = max(
+            poll_seconds,
+            int(summary.get("quota_wait_seconds", 0)),
+            int(summary.get("breaker_wait_seconds", 0)),
+        )
+        LOGGER.info(
+            "Cycle complete mode=%s checked=%s opportunities=%s next_poll=%ss quota_wait=%ss breaker_wait=%ss",
+            "turbo" if in_turbo else "eco",
+            int(summary.get("domains_checked", 0)),
+            int(summary.get("opportunities", 0)),
+            poll_seconds,
+            int(summary.get("quota_wait_seconds", 0)),
+            int(summary.get("breaker_wait_seconds", 0)),
+        )
+        resume_event = app.bot_data.get("watcher_resume_event")
+        if not isinstance(resume_event, asyncio.Event):
+            resume_event = asyncio.Event()
+            app.bot_data["watcher_resume_event"] = resume_event
+        try:
+            await asyncio.wait_for(resume_event.wait(), timeout=next_wait)
+            resume_event.clear()
+        except TimeoutError:
+            pass
+
+
+async def fetch_godaddy_domains(app: Application, chat_id: int) -> dict[str, int]:
+    cfg = WatcherConfig.from_env()
+    validate_required_godaddy_config(cfg)
+    timeout = aiohttp.ClientTimeout(total=cfg.request_timeout_seconds)
+    app.bot_data.setdefault("scan_cycle_counter", 0)
+    app.bot_data.setdefault(
+        "latest_scan_summary",
+        {"domains_checked": 0, "vip_matches": 0, "general_finds": 0},
+    )
+
+    store = AlertStore(cfg.db_path)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            client = GoDaddyClient(session, cfg)
+            scan_semaphore = asyncio.Semaphore(cfg.scan_concurrency)
+            vip_folder = Path(__file__).with_name("vip_data")
+            active_vip_db = get_vip_database(vip_folder)
+            candidate_domains = build_candidate_domains(active_vip_db, cfg)
+            if not candidate_domains:
+                summary = {
+                    "domains_checked": 0,
+                    "vip_matches": 0,
+                    "general_finds": 0,
+                    "opportunities": 0,
+                    "quota_wait_seconds": 0,
+                    "breaker_wait_seconds": 0,
+                }
+                app.bot_data["scan_cycle_counter"] = int(app.bot_data.get("scan_cycle_counter", 0)) + 1
+                app.bot_data["latest_scan_summary"] = summary
+                return summary
+
+            limit = min(cfg.max_domains_per_cycle, len(candidate_domains))
+            domain_cursor = int(app.bot_data.get("domain_cursor", 0))
+            selected_domains, next_cursor = select_circular_batch(
+                candidate_domains,
+                domain_cursor,
+                limit,
+            )
+            app.bot_data["domain_cursor"] = next_cursor
+            LOGGER.info("Fetching from GoDaddy: domains=%s", len(selected_domains))
+
+            async def check_with_guard(domain: str) -> Optional[DomainOpportunity]:
+                async with scan_semaphore:
+                    try:
+                        return await client.check_domain_availability(domain)
+                    except GoDaddyCircuitOpenError as exc:
+                        LOGGER.info("%s", exc)
+                        return None
+                    except Exception as exc:
+                        LOGGER.warning("Availability check failed for %s: %s", domain, exc)
+                        return None
+
+            checks = await asyncio.gather(*(check_with_guard(domain) for domain in selected_domains))
+            opportunities = [op for op in checks if op is not None]
+            LOGGER.info("Fetched %s domains from GoDaddy (available=%s)", len(selected_domains), len(opportunities))
+
+            chat_filters = app.bot_data.get("chat_filters", {})
+            target_chat_ids = {chat_id}
+            target_chat_ids.update(_parse_chat_id_keys(chat_filters))
+
+            priority_heap: list[tuple[float, str, DomainOpportunity]] = []
+            for opportunity in opportunities:
+                heapq.heappush(
+                    priority_heap,
+                    (
+                        -priority_score(opportunity.domain, cfg, active_vip_db),
+                        opportunity.domain,
+                        opportunity,
+                    ),
+                )
+
+            candidates: list[DomainOpportunity] = []
+            while priority_heap:
+                _, _, opportunity = heapq.heappop(priority_heap)
+                candidates.append(opportunity)
+
+            vip_candidates: list[DomainOpportunity] = []
+            non_vip_candidates: list[DomainOpportunity] = []
+            for item in candidates:
+                root_word = item.sld.lower()
+                tld = item.tld.lower()
+                vip_match = tld in cfg.allowed_tlds and root_word in active_vip_db
+                if vip_match:
+                    vip_candidates.append(item)
+                else:
+                    non_vip_candidates.append(item)
+
+            vip_match_count = 0
+            general_match_count = 0
+
+            for opportunity in vip_candidates:
+                try:
+                    vip_record = active_vip_db.get(opportunity.sld)
+                    if vip_record is None:
+                        continue
+                    vip_match_count += 1
+                    for target_chat_id in target_chat_ids:
+                        if store.has_alerted(target_chat_id, opportunity.domain):
+                            continue
+                        try:
+                            await app.bot.send_message(
+                                chat_id=target_chat_id,
+                                text=format_vip_alert(opportunity, vip_record),
+                                parse_mode="HTML",
+                                disable_web_page_preview=True,
+                            )
+                            store.mark_alerted(target_chat_id, opportunity.domain, opportunity.source)
+                            LOGGER.info(
+                                "VIP Telegram send success chat_id=%s domain=%s",
+                                target_chat_id,
+                                opportunity.domain,
+                            )
+                        except Exception as send_exc:
+                            LOGGER.exception(
+                                "VIP Telegram send failed chat_id=%s domain=%s error=%s",
+                                target_chat_id,
+                                opportunity.domain,
+                                send_exc,
+                            )
+                    LOGGER.info("VIP alert sent domain=%s status=%s", opportunity.domain, opportunity.availability_status)
+                except Exception as exc:
+                    LOGGER.exception("Failed to send VIP Telegram alert for %s: %s", opportunity.domain, exc)
+
+            for opportunity in non_vip_candidates:
+                if not is_general_find_candidate(opportunity, cfg):
+                    continue
+                try:
+                    general_match_count += 1
+                    for target_chat_id in target_chat_ids:
+                        if store.has_alerted(target_chat_id, opportunity.domain):
+                            continue
+                        try:
+                            await app.bot.send_message(
+                                chat_id=target_chat_id,
+                                text=format_general_find_alert(opportunity),
+                                parse_mode="HTML",
+                                disable_web_page_preview=True,
+                            )
+                            store.mark_alerted(target_chat_id, opportunity.domain, opportunity.source)
+                            LOGGER.info(
+                                "General Telegram send success chat_id=%s domain=%s",
+                                target_chat_id,
+                                opportunity.domain,
+                            )
+                        except Exception as send_exc:
+                            LOGGER.exception(
+                                "General Telegram send failed chat_id=%s domain=%s error=%s",
+                                target_chat_id,
+                                opportunity.domain,
+                                send_exc,
+                            )
+                    LOGGER.info(
+                        "General find alert sent domain=%s ask=$%.2f tld=%s len=%s",
+                        opportunity.domain,
+                        opportunity.ask_price_usd,
+                        opportunity.tld,
+                        len(opportunity.sld),
+                    )
+                except Exception as exc:
+                    LOGGER.exception("Failed to send General Find alert for %s: %s", opportunity.domain, exc)
+
+            summary = {
+                "domains_checked": len(selected_domains),
+                "vip_matches": vip_match_count,
+                "general_finds": general_match_count,
+                "opportunities": len(opportunities),
+                "quota_wait_seconds": client.quota_backoff_remaining_seconds(),
+                "breaker_wait_seconds": client.circuit_open_remaining_seconds(),
+            }
+            app.bot_data["scan_cycle_counter"] = int(app.bot_data.get("scan_cycle_counter", 0)) + 1
+            app.bot_data["latest_scan_summary"] = summary
+            return summary
+    finally:
+        store.close()
