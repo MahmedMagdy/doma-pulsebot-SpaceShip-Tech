@@ -16,6 +16,7 @@ from typing import Any, Optional
 import aiohttp
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
+from telegram.error import RetryAfter
 from telegram.ext import Application
 
 from vip_database import VipRecord, get_vip_database, reload_vip_database
@@ -24,8 +25,8 @@ LOGGER = logging.getLogger(__name__)
 
 # ─── Tuning constants ────────────────────────────────────────────────────────
 MAIN_CHAT_ID = '-1003736596502'
-TELEGRAM_TOPICS_MAP = { '.dev': 23, '.app': 3, '.my': 2, '.tech': 4, '.com': 5, '.ae': 6 }
-PRIORITY_TLDS = frozenset({".com", ".ae"})
+TELEGRAM_TOPICS_MAP = { '.dev': 23, '.app': 3, '.my': 2, '.tech': 4, '.com': 5, '.ai': None }
+PRIORITY_TLDS = frozenset({".com", ".tech", ".my", ".app", ".dev", ".ai"})
 
 MIN_POLL_SECONDS = 1
 MIN_RETRY_ATTEMPTS = 1
@@ -35,6 +36,7 @@ MIN_QUOTA_COOLDOWN_SECONDS = 30
 MIN_CIRCUIT_BREAKER_SECONDS = 30
 DEFAULT_FALLBACK_ASK_PRICE_USD = 10.0
 WATCHER_ERROR_RETRY_SECONDS = 5
+TARGET_TLDS = {".com", ".tech", ".my", ".app", ".dev", ".ai"}
 
 # Spaceship-specific throttle / batch controls
 # ─ 2 s intra-batch delay as required; keep default 429-backoff seed here too
@@ -98,7 +100,7 @@ class WatcherConfig:
     circuit_breaker_open_seconds: int = 120
     min_margin_usd: float = 20.0
     min_margin_ratio: float = 1.8
-    allowed_tlds: set[str] = field(default_factory=lambda: {".ae", ".tech", ".my", ".com", ".app"})
+    allowed_tlds: set[str] = field(default_factory=lambda: {".com", ".tech", ".my", ".app", ".dev", ".ai"})
     high_value_keywords: set[str] = field(
         default_factory=lambda: {
             "ai",
@@ -140,11 +142,11 @@ class WatcherConfig:
     vip_reload_seconds: int = 3600
     scan_concurrency: int = 50
     general_find_max_length: int = 5
-    general_find_tlds: set[str] = field(default_factory=lambda: {".com", ".ae"})
+    general_find_tlds: set[str] = field(default_factory=lambda: {".com", ".tech", ".my", ".app", ".dev", ".ai"})
 
     @classmethod
     def from_env(cls) -> "WatcherConfig":
-        raw_tlds = os.getenv("ALLOWED_TLDS", ".ae,.tech,.my,.com,.app")
+        raw_tlds = os.getenv("ALLOWED_TLDS", ".com,.tech,.my,.app,.dev,.ai")
         allowed_tlds = {
             t.strip().lower() if t.strip().startswith(".") else f".{t.strip().lower()}"
             for t in raw_tlds.split(",")
@@ -165,7 +167,7 @@ class WatcherConfig:
             "gibberish,unbrandable,unpronounceable,nonsense,meaningless,awkward,spammy",
         )
         negative_keywords = {kw.strip().lower() for kw in raw_negative_keywords.split(",") if kw.strip()}
-        raw_general_find_tlds = os.getenv("GENERAL_FIND_TLDS", ".com,.ae")
+        raw_general_find_tlds = os.getenv("GENERAL_FIND_TLDS", ".com,.tech,.my,.app,.dev,.ai")
         general_find_tlds = {
             t.strip().lower() if t.strip().startswith(".") else f".{t.strip().lower()}"
             for t in raw_general_find_tlds.split(",")
@@ -191,7 +193,7 @@ class WatcherConfig:
             ),
             min_margin_usd=float(os.getenv("ARBITRAGE_MIN_GAP_USD", "20")),
             min_margin_ratio=float(os.getenv("ARBITRAGE_MIN_RATIO", "1.8")),
-            allowed_tlds=allowed_tlds or {".ae", ".tech", ".my", ".com", ".app"},
+            allowed_tlds=allowed_tlds or {".com", ".tech", ".my", ".app", ".dev", ".ai"},
             high_value_keywords=high_value_keywords
             or {"ai", "crypto", "cloud", "data", "dev", "app", "bot", "pay", "trade", "labs"},
             negative_keywords=negative_keywords
@@ -207,7 +209,7 @@ class WatcherConfig:
             vip_reload_seconds=max(60, int(os.getenv("VIP_RELOAD_SECONDS", "3600"))),
             scan_concurrency=max(1, int(os.getenv("SCAN_CONCURRENCY", "50"))),
             general_find_max_length=max(1, int(os.getenv("GENERAL_FIND_MAX_LENGTH", "5"))),
-            general_find_tlds=general_find_tlds or {".com", ".ae"},
+            general_find_tlds=general_find_tlds or {".com", ".tech", ".my", ".app", ".dev", ".ai"},
         )
 
 
@@ -831,7 +833,8 @@ def _normalize_tld(value: str) -> str:
 
 
 def _effective_allowed_tlds(cfg: WatcherConfig) -> set[str]:
-    return set(cfg.allowed_tlds).union(PRIORITY_TLDS)
+    configured = {t for t in set(cfg.allowed_tlds).union(PRIORITY_TLDS) if t in TARGET_TLDS}
+    return configured or set(TARGET_TLDS)
 
 
 def _is_priority_tld_domain(domain: str) -> bool:
@@ -875,7 +878,11 @@ def _domain_status_from_item(item: dict[str, Any]) -> tuple[bool, str]:
         if result in {"available", "free", "open"}:
             return True, "Available"
         if result in {"unavailable", "registered", "taken", "reserved", "blocked"}:
+            LOGGER.info("Checked %s - Status: Unavailable", _parse_item_domain(item) or "N/A")
             return False, "Unavailable"
+        if result == "tldnotsupported":
+            LOGGER.info("Checked %s - Status: Tldnotsupported", _parse_item_domain(item) or "N/A")
+            return False, "Tldnotsupported"
         return False, result.title()
 
     availability = str(item.get("availability") or "").strip().lower()
@@ -883,7 +890,11 @@ def _domain_status_from_item(item: dict[str, Any]) -> tuple[bool, str]:
         if availability in {"available", "free", "open"}:
             return True, "Available"
         if availability in {"unavailable", "registered", "taken", "reserved", "blocked"}:
+            LOGGER.info("Checked %s - Status: Unavailable", _parse_item_domain(item) or "N/A")
             return False, "Unavailable"
+        if availability == "tldnotsupported":
+            LOGGER.info("Checked %s - Status: Tldnotsupported", _parse_item_domain(item) or "N/A")
+            return False, "Tldnotsupported"
         return False, availability.title()
 
     status = str(item.get("status") or "").strip().lower()
@@ -891,7 +902,11 @@ def _domain_status_from_item(item: dict[str, Any]) -> tuple[bool, str]:
         if status in {"available", "free", "open"}:
             return True, "Available"
         if status in {"unavailable", "registered", "taken", "reserved", "blocked"}:
+            LOGGER.info("Checked %s - Status: Unavailable", _parse_item_domain(item) or "N/A")
             return False, "Unavailable"
+        if status == "tldnotsupported":
+            LOGGER.info("Checked %s - Status: Tldnotsupported", _parse_item_domain(item) or "N/A")
+            return False, "Tldnotsupported"
         return False, status.title()
 
     return False, "Unavailable"
@@ -973,21 +988,32 @@ async def send_telegram_notification(
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
 
-    thread_id = TELEGRAM_TOPICS_MAP.get(tld)
-    if thread_id is not None:
-        payload["message_thread_id"] = thread_id
+    mapped_thread_id = TELEGRAM_TOPICS_MAP.get(tld)
+    if tld in TELEGRAM_TOPICS_MAP and mapped_thread_id is not None:
+        payload["message_thread_id"] = mapped_thread_id
 
-    try:
-        await app.bot.send_message(**payload)
-    except Exception:
-        LOGGER.exception(
-            "Telegram send failed chat_id=%s thread_id=%s tld=%s domain=%s",
-            payload["chat_id"],
-            payload.get("message_thread_id"),
-            tld or "N/A",
-            domain_name,
-        )
-        raise
+    while True:
+        try:
+            await app.bot.send_message(**payload)
+            await asyncio.sleep(1)
+            return
+        except RetryAfter as e:
+            wait_time = int(getattr(e, "retry_after", 1) or 1)
+            LOGGER.warning(
+                "Telegram flood control exceeded. Retrying in %s seconds (domain=%s)",
+                wait_time,
+                domain_name,
+            )
+            await asyncio.sleep(wait_time)
+        except Exception:
+            LOGGER.exception(
+                "Telegram send failed chat_id=%s thread_id=%s tld=%s domain=%s",
+                payload["chat_id"],
+                payload.get("message_thread_id"),
+                tld or "N/A",
+                domain_name,
+            )
+            raise
 
 
 async def emit_alert(
