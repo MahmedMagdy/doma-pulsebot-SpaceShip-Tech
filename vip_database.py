@@ -6,6 +6,15 @@ from pathlib import Path
 from typing import Optional
 
 LOGGER = logging.getLogger(__name__)
+@dataclass(frozen=True)
+class VipRecord:
+    abbreviation: str
+    sector: str
+    rating: str
+    meaning_en: str
+    meaning_ar: str
+
+
 VIP_DATA_CACHE: dict[str, VipRecord] = {}
 VIP_DATA_LOCK = threading.Lock()
 ABBREVIATION_HEADER_TOKENS = {"الاختصار", "abbreviation"}
@@ -24,15 +33,6 @@ HEADER_ROW_TOKENS = {
     "meaning in arabic",
 }
 POSITIONAL_COLUMN_COUNT = 5
-
-
-@dataclass(frozen=True)
-class VipRecord:
-    abbreviation: str
-    sector: str
-    rating: str
-    meaning_en: str
-    meaning_ar: str
 
 
 def _first_header(headers: set[str], *candidates: str) -> Optional[str]:
