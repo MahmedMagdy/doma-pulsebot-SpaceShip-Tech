@@ -35,7 +35,7 @@ WATCHER_ERROR_RETRY_SECONDS = 5
 # Spaceship-specific throttle / batch controls
 # ─ 2 s intra-batch delay as required; keep default 429-backoff seed here too
 SPACESHIP_INTRA_BATCH_DELAY_SECONDS = 2
-SPACESHIP_BULK_BATCH_SIZE = 50          # Spaceship bulk-check optimal batch size
+SPACESHIP_BULK_BATCH_SIZE = 20          # Spaceship /domains/available max batch size
 
 
 class SpaceshipCircuitOpenError(Exception):
@@ -429,8 +429,8 @@ class SpaceshipClient:
         X-Api-Secret: <SPACESHIP_API_SECRET>
 
     Bulk availability endpoint:
-        POST  {base_url}/domains/check
-        Body: {"domains": ["example.com", ...]}   (max 50 per call)
+        POST  {base_url}/domains/available
+        Body: {"domains": ["example.com", ...]}   (max 20 per call)
 
     HTTP 429 handling (mandatory, non-crashing):
         1.  Read the `Retry-After` response header (seconds or HTTP-date).
@@ -645,10 +645,10 @@ class SpaceshipClient:
         """
         Check a single domain's availability via the Spaceship API.
 
-        Endpoint: POST {base_url}/domains/check
+        Endpoint: POST {base_url}/domains/available
         Body:     {"domains": ["<domain>"]}
         """
-        url = f"{self._base_url}/domains/check"
+        url = f"{self._base_url}/domains/available"
         payload = await self._request_json_with_retry(
             "POST",
             url,
@@ -669,7 +669,7 @@ class SpaceshipClient:
         """
         Bulk-check up to SPACESHIP_BULK_BATCH_SIZE domains in a single POST.
 
-        Endpoint: POST {base_url}/domains/check
+        Endpoint: POST {base_url}/domains/available
         Body:     {"domains": ["d1.com", "d2.ae", ...]}
 
         Returns (opportunities, failed_count).
@@ -677,7 +677,7 @@ class SpaceshipClient:
         if not domains:
             return [], 0
 
-        url = f"{self._base_url}/domains/check"
+        url = f"{self._base_url}/domains/available"
         payload = await self._request_json_with_retry(
             "POST",
             url,
@@ -701,8 +701,23 @@ class SpaceshipClient:
             if normalized_domain:
                 seen_domains.add(normalized_domain)
 
+            # Spaceship response variants observed in the wild:
+            # 1) {"available": true|false}
+            # 2) {"result": "available"|"unavailable"|"error"}
+            # 3) Legacy/fallback status-only shape with "status": "Available"
+            # We normalize all three to a single boolean for robust parsing.
             available = item.get("available")
-            if isinstance(available, bool) and not available:
+            result = str(item.get("result") or "").strip().lower()
+            is_available = (
+                available is True
+                or result == "available"
+                or (
+                    available is None
+                    and not result
+                    and str(item.get("status") or "").strip().lower() == "available"
+                )
+            )
+            if not is_available:
                 continue
 
             if not normalized_domain or "." not in normalized_domain:
@@ -793,7 +808,7 @@ def _parse_domain_item(item: dict, fallback_domain: str) -> Optional["DomainOppo
         ask_price = DEFAULT_FALLBACK_ASK_PRICE_USD
 
     status_text = str(item.get("status") or "").strip() or "Available"
-    listing_url = f"https://www.spaceship.com/domain-name-search/?query={normalized_domain}"
+    listing_url = f"https://www.spaceship.com/domain-search/?query={normalized_domain}"
 
     return DomainOpportunity(
         domain=normalized_domain,
@@ -844,6 +859,7 @@ def format_alert(opportunity: DomainOpportunity, valuation: ValuationResult) -> 
         else "N/A"
     )
 
+    buy_url = html.escape(f"https://www.spaceship.com/domain-search/?query={opportunity.domain}")
     return (
         "🔥 <b>High-Margin Domain Deal</b>\n"
         f"🌐 <b>Domain:</b> <code>{domain}</code>\n"
@@ -853,7 +869,8 @@ def format_alert(opportunity: DomainOpportunity, valuation: ValuationResult) -> 
         f"🎯 <b>Brandability:</b> {brandability}\n"
         f"📈 <b>Gap:</b> {gap} ({ratio})\n"
         f"⚙️ <b>Valuation Method:</b> <code>{method}</code>\n"
-        f"🔗 <b>Listing:</b> {html.escape(opportunity.listing_url)}"
+        f"🔗 <b>Listing:</b> {html.escape(opportunity.listing_url)}\n"
+        f"🛒 <b>Buy:</b> <a href=\"{buy_url}\">Open in Spaceship</a>"
     )
 
 
@@ -863,7 +880,7 @@ async def emit_alert(
     opportunity: DomainOpportunity,
     valuation: ValuationResult,
 ) -> None:
-    buy_url = f"https://www.spaceship.com/domain-name-search/?query={opportunity.domain}"
+    buy_url = f"https://www.spaceship.com/domain-search/?query={opportunity.domain}"
     rows = [[InlineKeyboardButton("🛒 Buy / Register on Spaceship", url=buy_url)]]
     if opportunity.listing_url.rstrip("/") != buy_url.rstrip("/"):
         rows.append([InlineKeyboardButton("🔗 Open Listing", url=opportunity.listing_url)])
@@ -895,13 +912,15 @@ def format_general_find_alert(opportunity: DomainOpportunity) -> str:
     domain = html.escape(opportunity.domain)
     source = html.escape(opportunity.source)
     ask = html.escape(f"${opportunity.ask_price_usd:.2f} {opportunity.currency}")
+    buy_url = html.escape(f"https://www.spaceship.com/domain-search/?query={opportunity.domain}")
     return (
         "🟡 <b>[General Find]</b>\n"
         "Net strategy candidate (non-VIP quality hit)\n"
         f"🌐 <b>Domain:</b> <code>{domain}</code>\n"
         f"🏪 <b>Source:</b> {source}\n"
         f"💵 <b>Asking Price:</b> {ask}\n"
-        f"🔗 <b>Listing:</b> {html.escape(opportunity.listing_url)}"
+        f"🔗 <b>Listing:</b> {html.escape(opportunity.listing_url)}\n"
+        f"🛒 <b>Buy:</b> <a href=\"{buy_url}\">Open in Spaceship</a>"
     )
 
 
@@ -910,7 +929,7 @@ async def emit_general_find_alert(
     chat_id: int,
     opportunity: DomainOpportunity,
 ) -> None:
-    buy_url = f"https://www.spaceship.com/domain-name-search/?query={opportunity.domain}"
+    buy_url = f"https://www.spaceship.com/domain-search/?query={opportunity.domain}"
     rows = [[InlineKeyboardButton("🛒 Review on Spaceship", url=buy_url)]]
     rows.append([InlineKeyboardButton("📊 Whois", url=opportunity.whois_url)])
     keyboard = InlineKeyboardMarkup(rows)
@@ -930,6 +949,7 @@ def format_vip_alert(opportunity: DomainOpportunity, vip: VipRecord) -> str:
     rating = html.escape(vip.rating or "N/A")
     meaning_en = html.escape(vip.meaning_en or "N/A")
     meaning_ar = html.escape(vip.meaning_ar or "N/A")
+    buy_url = html.escape(f"https://www.spaceship.com/domain-search/?query={opportunity.domain}")
     return (
         "🚨 <b>VIP DOMAIN MATCH SPOTTED!</b> 🚨\n"
         f"🌍 <b>Domain:</b> <code>{domain}</code>\n"
@@ -937,7 +957,8 @@ def format_vip_alert(opportunity: DomainOpportunity, vip: VipRecord) -> str:
         f"🏢 <b>Sector:</b> {sector}\n"
         f"⭐ <b>Rating:</b> {rating}\n"
         f"🇬🇧 <b>EN Meaning:</b> {meaning_en}\n"
-        f"🇦🇪 <b>AR Meaning:</b> {meaning_ar}"
+        f"🇦🇪 <b>AR Meaning:</b> {meaning_ar}\n"
+        f"🛒 <b>Buy:</b> <a href=\"{buy_url}\">Open in Spaceship</a>"
     )
 
 
@@ -947,7 +968,7 @@ async def emit_vip_alert(
     opportunity: DomainOpportunity,
     vip: VipRecord,
 ) -> None:
-    buy_url = f"https://www.spaceship.com/domain-name-search/?query={opportunity.domain}"
+    buy_url = f"https://www.spaceship.com/domain-search/?query={opportunity.domain}"
     rows = [[InlineKeyboardButton("🔗 BUY NOW / SNIPE", url=buy_url)]]
     keyboard = InlineKeyboardMarkup(rows)
     await app.bot.send_message(
