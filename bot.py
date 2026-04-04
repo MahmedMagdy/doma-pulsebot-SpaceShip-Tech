@@ -101,13 +101,13 @@ def summary_text(filters: dict[str, Any]) -> str:
     keywords = ", ".join(kw.upper() for kw in filters["keywords"]) if filters["keywords"] else "Any"
     tm = "ON" if filters["trademark_check"] else "OFF"
     return (
-        "🎛️ *Pro Filter Command Center*\n"
-        f"• TLDs: {tlds}\n"
-        f"• Max Price: {price}\n"
-        f"• Min Appraisal: {appraisal}\n"
-        f"• Max Length: {length}\n"
-        f"• Keywords: {keywords}\n"
-        f"• Trademark Check: {tm}"
+        "🎛️ <b>Pro Filter Command Center</b>\n"
+        f"• <b>TLDs:</b> {tlds}\n"
+        f"• <b>Max Price:</b> {price}\n"
+        f"• <b>Min Appraisal:</b> {appraisal}\n"
+        f"• <b>Max Length:</b> {length}\n"
+        f"• <b>Keywords:</b> {keywords}\n"
+        f"• <b>Trademark Check:</b> {tm}"
     )
 
 
@@ -162,45 +162,46 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     get_chat_filters(store, chat_id)
     save_filter_store(store)
     await update.message.reply_text(
-        f"👋 Welcome to Doma PulseBot!\n\n"
-        f"Your pro domain command center is live.\n"
-        f"I'll notify you about high-margin domain arbitrage opportunities.\n"
-        f"📡 Registered Chat ID: `{chat_id}`\n\n"
-        f"Commands:\n"
-        f"/filter - Pro filter menu\n"
-        f"/stats - Watcher status\n"
-        f"/pause - Pause scans\n"
-        f"/resume - Resume scans\n"
-        f"/force_scan - Scan now\n"
-        f"/help - Full command list",
-        parse_mode="Markdown"
+        "👋 <b>Welcome to Doma PulseBot!</b>\n\n"
+        "Your pro domain command center is live.\n"
+        "I will notify you about high-margin domain arbitrage opportunities.\n"
+        f"📡 <b>Registered Chat ID:</b> <code>{chat_id}</code>\n\n"
+        "<b>Commands:</b>\n"
+        "<code>/filter</code> - Pro filter menu\n"
+        "<code>/stats</code> - Watcher status\n"
+        "<code>/pause</code> - Pause scans\n"
+        "<code>/resume</code> - Resume scans\n"
+        "<code>/force_scan</code> - Scan now\n"
+        "<code>/help</code> - Full command list",
+        parse_mode="HTML"
     )
     print(f"🆔 New user Chat ID: {chat_id}")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🧭 *Doma PulseBot Command Center*\n\n"
-        "/start — Register chat and quick-start commands\n"
-        "/help — Show all commands\n"
-        "/filter — Open advanced filter toggles\n"
-        "/stats — Show watcher schedule status\n"
-        "/pause — Pause polling loop (save API quota)\n"
-        "/resume — Resume polling loop\n"
-        "/force_scan — Force immediate GoDaddy scan/evaluation",
-        parse_mode="Markdown",
+        "🧭 <b>Doma PulseBot Command Center</b>\n\n"
+        "<code>/start</code> — Register chat and quick-start commands\n"
+        "<code>/help</code> — Show all commands\n"
+        "<code>/filter</code> — Open advanced filter toggles\n"
+        "<code>/stats</code> — Show watcher schedule status\n"
+        "<code>/pause</code> — Pause polling loop (save API quota)\n"
+        "<code>/resume</code> — Resume polling loop\n"
+        "<code>/force_scan</code> — Force immediate GoDaddy scan/evaluation",
+        parse_mode="HTML",
     )
 
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     paused = bool(context.application.bot_data.get("watcher_paused", False))
     await update.message.reply_text(
-        "📊 Watcher Status:\n"
+        "📊 <b>Watcher Status</b>\n"
         "✅ Bot is online\n"
-        f"⏯️ Polling: {'Paused' if paused else 'Running'}\n"
-        f"⚡ Turbo window (UTC): {os.getenv('TURBO_HOURS_UTC', '18-21')}\n"
-        f"🐢 Eco polling: {os.getenv('ECO_POLL_SECONDS', '120')}s\n"
-        f"🚀 Turbo polling: {os.getenv('TURBO_POLL_SECONDS', '8')}s"
+        f"⏯️ <b>Polling:</b> {'Paused' if paused else 'Running'}\n"
+        f"⚡ <b>Turbo window (UTC):</b> {os.getenv('TURBO_HOURS_UTC', '18-21')}\n"
+        f"🐢 <b>Eco polling:</b> {os.getenv('ECO_POLL_SECONDS', '120')}s\n"
+        f"🚀 <b>Turbo polling:</b> {os.getenv('TURBO_POLL_SECONDS', '8')}s",
+        parse_mode="HTML",
     )
 
 async def filter_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -211,13 +212,16 @@ async def filter_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         summary_text(filters),
         reply_markup=build_filter_keyboard(filters),
-        parse_mode="Markdown",
+        parse_mode="HTML",
     )
 
 
 async def pause_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.application.bot_data["watcher_paused"] = True
-    await update.message.reply_text("⏸️ Polling loop paused. Use /resume to continue or /force_scan to run one immediate cycle.")
+    await update.message.reply_text(
+        "⏸️ Polling loop paused. Use /resume to continue or /force_scan to run one immediate cycle.",
+        parse_mode="HTML",
+    )
 
 
 async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -225,7 +229,7 @@ async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     force_scan_event = context.application.bot_data.get("force_scan_event")
     if force_scan_event is not None:
         force_scan_event.set()
-    await update.message.reply_text("▶️ Polling loop resumed.")
+    await update.message.reply_text("▶️ Polling loop resumed.", parse_mode="HTML")
 
 
 async def force_scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -234,7 +238,10 @@ async def force_scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         force_scan_event = asyncio.Event()
         context.application.bot_data["force_scan_event"] = force_scan_event
     force_scan_event.set()
-    await update.message.reply_text("🚨 Forced scan queued. Running immediate GoDaddy fetch + evaluation.")
+    await update.message.reply_text(
+        "🚨 Forced scan queued. Running immediate GoDaddy fetch + evaluation.",
+        parse_mode="HTML",
+    )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -298,7 +305,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         summary_text(filters),
         reply_markup=build_filter_keyboard(filters),
-        parse_mode="Markdown",
+        parse_mode="HTML",
     )
 
 def main():

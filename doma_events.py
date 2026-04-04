@@ -20,7 +20,6 @@ from telegram.ext import Application
 from vip_database import VipRecord, get_vip_database, reload_vip_database
 
 LOGGER = logging.getLogger(__name__)
-SPECIAL_CHARS = r"_*[]()~`>#+-=|{}.!"
 MIN_POLL_SECONDS = 1
 MIN_RETRY_ATTEMPTS = 1
 MIN_RETRY_BASE_SECONDS = 0.2
@@ -276,13 +275,6 @@ def validate_required_godaddy_config(cfg: WatcherConfig) -> None:
     if missing:
         missing_csv = ", ".join(missing)
         raise ValueError(f"Missing required GoDaddy configuration: {missing_csv}")
-
-
-def escape_md_v2(value: str) -> str:
-    escaped = value
-    for char in SPECIAL_CHARS:
-        escaped = escaped.replace(char, f"\\{char}")
-    return escaped
 
 
 def parse_float(value: Any) -> Optional[float]:
@@ -601,29 +593,29 @@ async def evaluate_opportunity(
 
 
 def format_alert(opportunity: DomainOpportunity, valuation: ValuationResult) -> str:
-    domain = escape_md_v2(opportunity.domain)
-    method = escape_md_v2(valuation.method)
-    source = escape_md_v2(opportunity.source)
-    ask = escape_md_v2(f"${opportunity.ask_price_usd:.2f} {opportunity.currency}")
-    estimate = escape_md_v2(f"${valuation.estimated_value_usd:.2f} USD")
-    gap = escape_md_v2(f"${valuation.margin_usd:.2f}")
-    ratio = escape_md_v2(f"x{valuation.margin_ratio:.2f}")
+    domain = html.escape(opportunity.domain)
+    method = html.escape(valuation.method)
+    source = html.escape(opportunity.source)
+    ask = html.escape(f"${opportunity.ask_price_usd:.2f} {opportunity.currency}")
+    estimate = html.escape(f"${valuation.estimated_value_usd:.2f} USD")
+    gap = html.escape(f"${valuation.margin_usd:.2f}")
+    ratio = html.escape(f"x{valuation.margin_ratio:.2f}")
     brandability = (
-        escape_md_v2(f"{valuation.brandability_score:.2f}")
+        html.escape(f"{valuation.brandability_score:.2f}")
         if valuation.brandability_score is not None
         else "N/A"
     )
 
     return (
-        "🔥 *High\\-Margin Domain Deal*\n"
-        f"🌐 *Domain:* `{domain}`\n"
-        f"🏪 *Source:* {source}\n"
-        f"💵 *Asking Price:* {ask}\n"
-        f"🧠 *Estimated Value:* {estimate}\n"
-        f"🎯 *Brandability:* {brandability}\n"
-        f"📈 *Gap:* {gap} \\({ratio}\\)\n"
-        f"⚙️ *Valuation Method:* `{method}`\n"
-        f"🔗 *Listing:* {escape_md_v2(opportunity.listing_url)}"
+        "🔥 <b>High-Margin Domain Deal</b>\n"
+        f"🌐 <b>Domain:</b> <code>{domain}</code>\n"
+        f"🏪 <b>Source:</b> {source}\n"
+        f"💵 <b>Asking Price:</b> {ask}\n"
+        f"🧠 <b>Estimated Value:</b> {estimate}\n"
+        f"🎯 <b>Brandability:</b> {brandability}\n"
+        f"📈 <b>Gap:</b> {gap} ({ratio})\n"
+        f"⚙️ <b>Valuation Method:</b> <code>{method}</code>\n"
+        f"🔗 <b>Listing:</b> {html.escape(opportunity.listing_url)}"
     )
 
 
@@ -642,7 +634,7 @@ async def emit_alert(
     await app.bot.send_message(
         chat_id=chat_id,
         text=format_alert(opportunity, valuation),
-        parse_mode=ParseMode.MARKDOWN_V2,
+        parse_mode=ParseMode.HTML,
         reply_markup=keyboard,
         disable_web_page_preview=True,
     )
