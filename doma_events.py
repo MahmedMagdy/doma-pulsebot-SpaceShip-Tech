@@ -25,6 +25,7 @@ LOGGER = logging.getLogger(__name__)
 # ─── Tuning constants ────────────────────────────────────────────────────────
 MAIN_CHAT_ID = '-1003736596502'
 TELEGRAM_TOPICS_MAP = { '.dev': 23, '.app': 3, '.my': 2, '.tech': 4, '.com': 5, '.ae': 6 }
+PRIORITY_TLDS = frozenset({".com", ".ae"})
 
 MIN_POLL_SECONDS = 1
 MIN_RETRY_ATTEMPTS = 1
@@ -696,30 +697,17 @@ class SpaceshipClient:
         failed_count = 0
         normalized_input = {d.strip().lower() for d in domains if isinstance(d, str) and d.strip()}
         seen_domains: set[str] = set()
+        status_by_domain: dict[str, str] = {}
 
         for item in results:
             if not isinstance(item, dict):
                 continue
-            normalized_domain = str(item.get("domain") or "").strip().lower()
+            normalized_domain = _parse_item_domain(item)
             if normalized_domain:
                 seen_domains.add(normalized_domain)
-
-            # Spaceship response variants observed in the wild:
-            # 1) {"available": true|false}
-            # 2) {"result": "available"|"unavailable"|"error"}
-            # 3) Legacy/fallback status-only shape with "status": "Available"
-            # We normalize all three to a single boolean for robust parsing.
-            available = item.get("available")
-            result = str(item.get("result") or "").strip().lower()
-            is_available = (
-                available is True
-                or result == "available"
-                or (
-                    available is None
-                    and not result
-                    and str(item.get("status") or "").strip().lower() == "available"
-                )
-            )
+            is_available, status_text = _domain_status_from_item(item)
+            if normalized_domain:
+                status_by_domain[normalized_domain] = status_text
             if not is_available:
                 continue
 
@@ -729,11 +717,23 @@ class SpaceshipClient:
 
             opp = _parse_domain_item(item, normalized_domain)
             if opp is not None:
+                status_by_domain[normalized_domain] = opp.availability_status or status_text
                 opportunities.append(opp)
 
         if normalized_input:
             missing = normalized_input.difference(seen_domains)
             failed_count += len(missing)
+            for missing_domain in missing:
+                status_by_domain[missing_domain] = "No API Result"
+
+        if normalized_input:
+            for checked_domain in sorted(normalized_input):
+                if _is_priority_tld_domain(checked_domain):
+                    LOGGER.info(
+                        "[INFO] Checked %s - Status: %s",
+                        checked_domain,
+                        status_by_domain.get(checked_domain, "Unavailable"),
+                    )
 
         return opportunities, failed_count
 
@@ -821,6 +821,76 @@ def _parse_domain_item(item: dict, fallback_domain: str) -> Optional["DomainOppo
         currency="USD",
         availability_status=status_text,
     )
+
+
+def _normalize_tld(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    return raw if raw.startswith(".") else f".{raw}"
+
+
+def _is_priority_tld_domain(domain: str) -> bool:
+    clean = str(domain or "").strip().lower()
+    if "." not in clean:
+        return False
+    return f".{clean.rpartition('.')[-1]}" in PRIORITY_TLDS
+
+
+def _parse_item_domain(item: dict[str, Any], fallback_domain: str = "") -> str:
+    for key in ("domain", "domainName", "name", "fqdn"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    sld = str(item.get("sld") or item.get("label") or "").strip().lower()
+    tld = _normalize_tld(str(item.get("tld") or item.get("zone") or "").strip().lower())
+    if sld and tld:
+        return f"{sld}{tld}"
+    return str(fallback_domain or "").strip().lower()
+
+
+def _domain_status_from_item(item: dict[str, Any]) -> tuple[bool, str]:
+    available = item.get("available")
+    if isinstance(available, bool):
+        return available, "Available" if available else "Unavailable"
+
+    is_available = item.get("isAvailable")
+    if isinstance(is_available, bool):
+        return is_available, "Available" if is_available else "Unavailable"
+
+    is_registered = item.get("isRegistered")
+    if isinstance(is_registered, bool):
+        return (not is_registered), "Unavailable" if is_registered else "Available"
+
+    registered = item.get("registered")
+    if isinstance(registered, bool):
+        return (not registered), "Unavailable" if registered else "Available"
+
+    result = str(item.get("result") or "").strip().lower()
+    if result:
+        if result in {"available", "free", "open"}:
+            return True, "Available"
+        if result in {"unavailable", "registered", "taken", "reserved", "blocked"}:
+            return False, "Unavailable"
+        return False, result.title()
+
+    availability = str(item.get("availability") or "").strip().lower()
+    if availability:
+        if availability in {"available", "free", "open"}:
+            return True, "Available"
+        if availability in {"unavailable", "registered", "taken", "reserved", "blocked"}:
+            return False, "Unavailable"
+        return False, availability.title()
+
+    status = str(item.get("status") or "").strip().lower()
+    if status:
+        if status in {"available", "free", "open"}:
+            return True, "Available"
+        if status in {"unavailable", "registered", "taken", "reserved", "blocked"}:
+            return False, "Unavailable"
+        return False, status.title()
+
+    return False, "Unavailable"
 
 
 async def evaluate_opportunity(
@@ -1078,14 +1148,16 @@ def _chat_filter_matches(
 def build_candidate_domains(vip_db: dict[str, VipRecord], cfg: WatcherConfig) -> list[str]:
     """Build candidate domains from VIP roots and high-value keyword permutations across allowed TLDs."""
     domains: set[str] = set()
+    effective_tlds = set(cfg.allowed_tlds)
+    effective_tlds.update(PRIORITY_TLDS)
     for root in vip_db.keys():
         normalized_root = root.strip().lower()
         if not normalized_root:
             continue
-        for tld in cfg.allowed_tlds:
+        for tld in effective_tlds:
             domains.add(f"{normalized_root}{tld}")
     for keyword in cfg.high_value_keywords:
-        for tld in cfg.allowed_tlds:
+        for tld in effective_tlds:
             domains.add(f"{keyword}{tld}")
             domains.add(f"get{keyword}{tld}")
             domains.add(f"my{keyword}{tld}")
@@ -1188,6 +1260,7 @@ async def fetch_spaceship_domains(app: Application, chat_id: int) -> dict[str, i
             vip_folder = Path(__file__).with_name("vip_data")
             active_vip_db = get_vip_database(vip_folder)
             candidate_domains = build_candidate_domains(active_vip_db, cfg)
+            cfg.allowed_tlds.update(PRIORITY_TLDS)
             if not candidate_domains:
                 summary = {
                     "domains_checked": 0,
@@ -1211,6 +1284,14 @@ async def fetch_spaceship_domains(app: Application, chat_id: int) -> dict[str, i
             )
             app.bot_data["domain_cursor"] = next_cursor
             LOGGER.info("Fetching from Spaceship API: domains=%s", len(selected_domains))
+            com_count = sum(1 for d in selected_domains if d.endswith(".com"))
+            ae_count = sum(1 for d in selected_domains if d.endswith(".ae"))
+            LOGGER.info(
+                "[INFO] Priority coverage this cycle: .com=%s .ae=%s (total=%s)",
+                com_count,
+                ae_count,
+                len(selected_domains),
+            )
             opportunities: list[DomainOpportunity] = []
             api_blocked_failed = 0
             for idx in range(0, len(selected_domains), SPACESHIP_BULK_BATCH_SIZE):
