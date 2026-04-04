@@ -233,7 +233,7 @@ async def force_scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chat_id = update.effective_chat.id
     await update.message.reply_text("🚨 Forced scan started. Contacting GoDaddy now...", parse_mode="HTML")
     try:
-        summary = await fetch_godaddy_domains(context.application, DEFAULT_CHAT_ID)
+        summary = await fetch_godaddy_domains(context.application, chat_id)
         checked = int(summary.get("domains_checked", 0))
         vip = int(summary.get("vip_matches", 0))
         await context.bot.send_message(

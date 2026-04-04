@@ -28,6 +28,7 @@ MIN_QUOTA_COOLDOWN_SECONDS = 30
 MIN_CIRCUIT_BREAKER_SECONDS = 30
 GODADDY_PRICE_MICROS_THRESHOLD = 100000
 DEFAULT_FALLBACK_ASK_PRICE_USD = 10.0
+WATCHER_ERROR_RETRY_SECONDS = 5
 
 
 class GoDaddyCircuitOpenError(Exception):
@@ -839,7 +840,7 @@ async def watch_events(app: Application, chat_id: int) -> None:
             raise
         except Exception as exc:
             LOGGER.exception("GoDaddy watcher cycle failed: %s", exc)
-            await asyncio.sleep(5)
+            await asyncio.sleep(WATCHER_ERROR_RETRY_SECONDS)
             continue
 
         next_wait = max(
@@ -862,7 +863,6 @@ async def watch_events(app: Application, chat_id: int) -> None:
 async def fetch_godaddy_domains(app: Application, chat_id: int) -> dict[str, int]:
     cfg = WatcherConfig.from_env()
     validate_required_godaddy_config(cfg)
-    store = AlertStore(cfg.db_path)
     timeout = aiohttp.ClientTimeout(total=cfg.request_timeout_seconds)
     app.bot_data.setdefault("scan_cycle_counter", 0)
     app.bot_data.setdefault(
@@ -870,7 +870,9 @@ async def fetch_godaddy_domains(app: Application, chat_id: int) -> dict[str, int
         {"domains_checked": 0, "vip_matches": 0, "general_finds": 0},
     )
 
+    store: Optional[AlertStore] = None
     try:
+        store = AlertStore(cfg.db_path)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             client = GoDaddyClient(session, cfg)
             scan_semaphore = asyncio.Semaphore(cfg.scan_concurrency)
@@ -1032,4 +1034,5 @@ async def fetch_godaddy_domains(app: Application, chat_id: int) -> dict[str, int
             app.bot_data["latest_scan_summary"] = summary
             return summary
     finally:
-        store.close()
+        if store is not None:
+            store.close()
