@@ -1,0 +1,101 @@
+﻿القطاع,الاختصار,التقييم,المعنى بالإنجليزية,المعنى بالعربية
+الاتصالات وشبكات الجيل الخامس (Telecom),ISP,10/10,Internet Service Provider,مزود خدمة الإنترنت
+الاتصالات وشبكات الجيل الخامس (Telecom),MNO,9.5/10,Mobile Network Operator,مشغل شبكة الهاتف المحمول
+الاتصالات وشبكات الجيل الخامس (Telecom),MVNO,9/10,Mobile Virtual Network Operator,مشغل شبكة المحمول الافتراضية
+الاتصالات وشبكات الجيل الخامس (Telecom),VOIP,10/10,Voice over Internet Protocol,نقل الصوت عبر بروتوكول الإنترنت
+الاتصالات وشبكات الجيل الخامس (Telecom),LTE,10/10,Long-Term Evolution,تطور طويل الأمد (شبكات 4G)
+الاتصالات وشبكات الجيل الخامس (Telecom),GSM,9.5/10,Global System for Mobile Communications,النظام العالمي للاتصالات المتنقلة
+الاتصالات وشبكات الجيل الخامس (Telecom),CDMA,9/10,Code Division Multiple Access,الوصول المتعدد بتقسيم الشفرة
+الاتصالات وشبكات الجيل الخامس (Telecom),SMS,10/10,Short Message Service,خدمة الرسائل القصيرة
+الاتصالات وشبكات الجيل الخامس (Telecom),MMS,8.5/10,Multimedia Messaging Service,خدمة رسائل الوسائط المتعددة
+الاتصالات وشبكات الجيل الخامس (Telecom),WLAN,9.5/10,Wireless Local Area Network,شبكة محلية لاسلكية
+الاتصالات وشبكات الجيل الخامس (Telecom),WISP,9/10,Wireless Internet Service Provider,مزود خدمة الإنترنت اللاسلكي
+الاتصالات وشبكات الجيل الخامس (Telecom),FTTH,9.5/10,Fiber to the Home,الألياف البصرية للمنازل
+الاتصالات وشبكات الجيل الخامس (Telecom),FTTC,8.5/10,Fiber to the Cabinet,الألياف البصرية للكبائن
+الاتصالات وشبكات الجيل الخامس (Telecom),PON,8.5/10,Passive Optical Network,الشبكة البصرية غير النشطة
+الاتصالات وشبكات الجيل الخامس (Telecom),QOS,9/10,Quality of Service,جودة الخدمة
+الاتصالات وشبكات الجيل الخامس (Telecom),SDN,9.5/10,Software-Defined Networking,الشبكات المعرفة بالبرمجيات
+الاتصالات وشبكات الجيل الخامس (Telecom),NFV,9/10,Network Functions Virtualization,المحاكاة الافتراضية لوظائف الشبكة
+الاتصالات وشبكات الجيل الخامس (Telecom),RAN,9/10,Radio Access Network,شبكة الوصول الراديوي
+الاتصالات وشبكات الجيل الخامس (Telecom),BSS,8.5/10,Business Support Systems,أنظمة دعم الأعمال
+الاتصالات وشبكات الجيل الخامس (Telecom),OSS,8.5/10,Operations Support Systems,أنظمة دعم العمليات
+التصنيع والصناعة 4.0 (Manufacturing),CNC,10/10,Computer Numerical Control,التحكم الرقمي باستخدام الحاسوب
+التصنيع والصناعة 4.0 (Manufacturing),PLC,9.5/10,Programmable Logic Controller,وحدة التحكم المنطقي القابلة للبرمجة
+التصنيع والصناعة 4.0 (Manufacturing),SCADA,10/10,Supervisory Control and Data Acquisition,التحكم الإشرافي وتحصيل البيانات
+التصنيع والصناعة 4.0 (Manufacturing),MES,9/10,Manufacturing Execution System,نظام تنفيذ التصنيع
+التصنيع والصناعة 4.0 (Manufacturing),BOM,9.5/10,Bill of Materials,قائمة المواد (للتصنيع)
+التصنيع والصناعة 4.0 (Manufacturing),CAM,9.5/10,Computer-Aided Manufacturing,التصنيع بمساعدة الحاسوب
+التصنيع والصناعة 4.0 (Manufacturing),CAE,9/10,Computer-Aided Engineering,الهندسة بمساعدة الحاسوب
+التصنيع والصناعة 4.0 (Manufacturing),TQM,10/10,Total Quality Management,إدارة الجودة الشاملة
+التصنيع والصناعة 4.0 (Manufacturing),TPM,8.5/10,Total Productive Maintenance,الصيانة الإنتاجية الشاملة
+التصنيع والصناعة 4.0 (Manufacturing),OEE,9/10,Overall Equipment Effectiveness,الفعالية الشاملة للمعدات
+التصنيع والصناعة 4.0 (Manufacturing),IIOT,10/10,Industrial Internet of Things,إنترنت الأشياء الصناعي
+التصنيع والصناعة 4.0 (Manufacturing),M2M,9.5/10,Machine to Machine,من آلة إلى آلة
+التصنيع والصناعة 4.0 (Manufacturing),AGV,9/10,Automated Guided Vehicle,المركبات الموجهة آلياً
+التصنيع والصناعة 4.0 (Manufacturing),HMI,9.5/10,Human-Machine Interface,واجهة التفاعل بين الإنسان والآلة
+التصنيع والصناعة 4.0 (Manufacturing),DCS,9/10,Distributed Control System,نظام التحكم الموزع
+التصنيع والصناعة 4.0 (Manufacturing),CIM,8.5/10,Computer-Integrated Manufacturing,التصنيع المتكامل بالحاسوب
+التصنيع والصناعة 4.0 (Manufacturing),FMS,8.5/10,Flexible Manufacturing System,نظام التصنيع المرن
+التصنيع والصناعة 4.0 (Manufacturing),SPC,9/10,Statistical Process Control,التحكم الإحصائي في العمليات
+التصنيع والصناعة 4.0 (Manufacturing),NDT,8.5/10,Non-Destructive Testing,الاختبار غير الإتلافي
+التصنيع والصناعة 4.0 (Manufacturing),EHS,9/10,Environment Health and Safety,البيئة والصحة والسلامة
+تكنولوجيا الفضاء والطيران (Space & Aero),LEO,10/10,Low Earth Orbit,المدار الأرضي المنخفض
+تكنولوجيا الفضاء والطيران (Space & Aero),GEO,9.5/10,Geostationary Earth Orbit,المدار الأرضي الجغرافي المتزامن
+تكنولوجيا الفضاء والطيران (Space & Aero),MEO,8.5/10,Medium Earth Orbit,المدار الأرضي المتوسط
+تكنولوجيا الفضاء والطيران (Space & Aero),ISS,10/10,International Space Station,محطة الفضاء الدولية
+تكنولوجيا الفضاء والطيران (Space & Aero),EVA,9/10,Extravehicular Activity,النشاط خارج المركبة (السير في الفضاء)
+تكنولوجيا الفضاء والطيران (Space & Aero),SRB,8.5/10,Solid Rocket Booster,المعزز الصاروخي الصلب
+تكنولوجيا الفضاء والطيران (Space & Aero),ICBM,9/10,Intercontinental Ballistic Missile,صاروخ باليستي عابر للقارات
+تكنولوجيا الفضاء والطيران (Space & Aero),ATC,10/10,Air Traffic Control,مراقبة الحركة الجوية
+تكنولوجيا الفضاء والطيران (Space & Aero),FAA,10/10,Federal Aviation Administration,إدارة الطيران الفيدرالية
+تكنولوجيا الفضاء والطيران (Space & Aero),EASA,9/10,European Union Aviation Safety Agency,وكالة سلامة الطيران الأوروبية
+تكنولوجيا الفضاء والطيران (Space & Aero),VTOL,10/10,Vertical Take-Off and Landing,الإقلاع والهبوط العمودي
+تكنولوجيا الفضاء والطيران (Space & Aero),EVTOL,10/10,Electric Vertical Take-Off and Landing,الإقلاع والهبوط العمودي الكهربائي
+تكنولوجيا الفضاء والطيران (Space & Aero),UAS,9.5/10,Unmanned Aircraft System,نظام الطائرات بدون طيار
+تكنولوجيا الفضاء والطيران (Space & Aero),IFR,9/10,Instrument Flight Rules,قواعد الطيران الآلي
+تكنولوجيا الفضاء والطيران (Space & Aero),VFR,9/10,Visual Flight Rules,قواعد الطيران المرئي
+تكنولوجيا الفضاء والطيران (Space & Aero),FOD,8.5/10,Foreign Object Debris,حطام الأجسام الغريبة
+تكنولوجيا الفضاء والطيران (Space & Aero),APU,9/10,Auxiliary Power Unit,وحدة الطاقة المساعدة
+تكنولوجيا الفضاء والطيران (Space & Aero),MFD,9/10,Multi-Function Display,شاشة العرض متعددة الوظائف
+تكنولوجيا الفضاء والطيران (Space & Aero),TCAS,9.5/10,Traffic Collision Avoidance System,نظام تجنب التصادم الجوي
+تكنولوجيا الفضاء والطيران (Space & Aero),GPS,10/10,Global Positioning System,نظام تحديد المواقع العالمي
+التكنولوجيا القانونية والامتثال (LegalTech),IPR,10/10,Intellectual Property Rights,حقوق الملكية الفكرية
+التكنولوجيا القانونية والامتثال (LegalTech),LLC,10/10,Limited Liability Company,شركة ذات مسؤولية محدودة
+التكنولوجيا القانونية والامتثال (LegalTech),INC,10/10,Incorporated,شركة مساهمة
+التكنولوجيا القانونية والامتثال (LegalTech),LTD,10/10,Limited,شركة محدودة
+التكنولوجيا القانونية والامتثال (LegalTech),LLP,9.5/10,Limited Liability Partnership,شراكة ذات مسؤولية محدودة
+التكنولوجيا القانونية والامتثال (LegalTech),POA,9/10,Power of Attorney,توكيل رسمي
+التكنولوجيا القانونية والامتثال (LegalTech),KYB,9.5/10,Know Your Business,اعرف شركتك (تحقق أمني للشركات)
+التكنولوجيا القانونية والامتثال (LegalTech),CTF,9/10,Counter-Terrorism Financing,مكافحة تمويل الإرهاب
+التكنولوجيا القانونية والامتثال (LegalTech),EDD,8.5/10,Electronic Data Discovery,الاكتشاف الإلكتروني للبيانات
+التكنولوجيا القانونية والامتثال (LegalTech),CLM,9.5/10,Contract Lifecycle Management,إدارة دورة حياة العقود
+التكنولوجيا القانونية والامتثال (LegalTech),ALSP,8.5/10,Alternative Legal Service Provider,مزود الخدمات القانونية البديلة
+التكنولوجيا القانونية والامتثال (LegalTech),DPA,9.5/10,Data Processing Agreement,اتفاقية معالجة البيانات
+التكنولوجيا القانونية والامتثال (LegalTech),MSA,9.5/10,Master Service Agreement,اتفاقية الخدمة الرئيسية
+التكنولوجيا القانونية والامتثال (LegalTech),SOW,9/10,Statement of Work,بيان العمل
+التكنولوجيا القانونية والامتثال (LegalTech),EULA,10/10,End-User License Agreement,اتفاقية ترخيص المستخدم النهائي
+التكنولوجيا القانونية والامتثال (LegalTech),ODR,9/10,Online Dispute Resolution,تسوية المنازعات عبر الإنترنت
+التكنولوجيا القانونية والامتثال (LegalTech),CDD,9.5/10,Customer Due Diligence,العناية الواجبة تجاه العملاء
+التكنولوجيا القانونية والامتثال (LegalTech),PEP,9/10,Politically Exposed Person,شخص مكشوف سياسياً
+التكنولوجيا القانونية والامتثال (LegalTech),PII,10/10,Personally Identifiable Information,معلومات التعريف الشخصية
+التكنولوجيا القانونية والامتثال (LegalTech),PHI,9.5/10,Protected Health Information,المعلومات الصحية المحمية
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),QSR,10/10,Quick Service Restaurant,مطاعم الخدمة السريعة
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),KDS,9.5/10,Kitchen Display System,نظام عرض المطبخ
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),BOH,9/10,Back of House,العمليات الخلفية للمطاعم
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),FOH,9/10,Front of House,الواجهة الأمامية للمطاعم
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),CPG,10/10,Consumer Packaged Goods,السلع الاستهلاكية المعبأة
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),HACCP,9.5/10,Hazard Analysis Critical Control Point,نظام تحليل المخاطر ونقاط التحكم الحرجة
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),FNB,10/10,Food and Beverage,الأغذية والمشروبات
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),CEA,9.5/10,Controlled Environment Agriculture,الزراعة في بيئة خاضعة للرقابة
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),VRT,8.5/10,Variable Rate Technology,تكنولوجيا المعدل المتغير (في الزراعة)
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),NDVI,8.5/10,Normalized Difference Vegetation Index,مؤشر الاختلاف الخضري (لتحليل المحاصيل)
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),GIS,10/10,Geographic Information System,نظام المعلومات الجغرافية
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),GMO,9/10,Genetically Modified Organism,كائن معدل وراثياً
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),FIFO,10/10,First In First Out,الوارد أولاً يصرف أولاً (إدارة المخزون)
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),COGS,9.5/10,Cost of Goods Sold,تكلفة البضائع المباعة
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),FAAS,9/10,Farming as a Service,الزراعة كخدمة
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),MRE,8.5/10,Meal Ready-to-Eat,وجبة جاهزة للأكل
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),RDI,8.5/10,Reference Daily Intake,الاستهلاك اليومي المرجعي
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),RTE,9.5/10,Ready-to-Eat,جاهز للأكل
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),RTD,9.5/10,Ready-to-Drink,جاهز للشرب
+تكنولوجيا الغذاء والزراعة (FoodTech & AgriTech),EPOS,9.5/10,Electronic Point of Sale,نقطة البيع الإلكترونية

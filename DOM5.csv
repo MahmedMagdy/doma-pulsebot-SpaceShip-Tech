@@ -1,0 +1,101 @@
+﻿القطاع,الاختصار,التقييم,المعنى بالإنجليزية,المعنى بالعربية
+التأمين وتكنولوجيا التأمين (InsurTech),TPA,10/10,Third Party Administrator,مسؤول الطرف الثالث (لإدارة المطالبات)
+التأمين وتكنولوجيا التأمين (InsurTech),GWP,9.5/10,Gross Written Premium,إجمالي الأقساط المكتتبة
+التأمين وتكنولوجيا التأمين (InsurTech),NWP,9/10,Net Written Premium,صافي الأقساط المكتتبة
+التأمين وتكنولوجيا التأمين (InsurTech),PNC,10/10,Property and Casualty,تأمين الممتلكات والحوادث
+التأمين وتكنولوجيا التأمين (InsurTech),ULI,9/10,Universal Life Insurance,التأمين الشامل على الحياة
+التأمين وتكنولوجيا التأمين (InsurTech),WLI,8.5/10,Whole Life Insurance,التأمين مدى الحياة
+التأمين وتكنولوجيا التأمين (InsurTech),BOLI,8.5/10,Bank-Owned Life Insurance,تأمين على الحياة مملوك للبنك
+التأمين وتكنولوجيا التأمين (InsurTech),COLI,8.5/10,Corporate-Owned Life Insurance,تأمين على الحياة مملوك للشركة
+التأمين وتكنولوجيا التأمين (InsurTech),IBNR,9.5/10,Incurred But Not Reported,خسائر متكبدة غير مبلغ عنها
+التأمين وتكنولوجيا التأمين (InsurTech),BII,10/10,Business Interruption Insurance,تأمين انقطاع الأعمال
+التأمين وتكنولوجيا التأمين (InsurTech),CGL,9.5/10,Commercial General Liability,المسؤولية العامة التجارية
+التأمين وتكنولوجيا التأمين (InsurTech),ENO,10/10,Errors and Omissions,تأمين الأخطاء والسهو (للمهنيين)
+التأمين وتكنولوجيا التأمين (InsurTech),BOP,9/10,Business Owner Policy,بوليصة أصحاب الأعمال
+التأمين وتكنولوجيا التأمين (InsurTech),FID,8.5/10,Fidelity Bond,سندات الأمانة (تأمين ضد خيانة الأمانة)
+التأمين وتكنولوجيا التأمين (InsurTech),GLI,9/10,General Liability Insurance,تأمين المسؤولية العامة
+التأمين وتكنولوجيا التأمين (InsurTech),UIM,8.5/10,Underinsured Motorist,تأمين ضد السائقين غير المؤمن عليهم كفاية
+التأمين وتكنولوجيا التأمين (InsurTech),PIP,9/10,Personal Injury Protection,حماية الإصابات الشخصية
+التأمين وتكنولوجيا التأمين (InsurTech),LTC,9.5/10,Long-Term Care,تأمين الرعاية طويلة الأجل
+التأمين وتكنولوجيا التأمين (InsurTech),EPL,9/10,Employment Practices Liability,تأمين مسؤولية ممارسات التوظيف
+التأمين وتكنولوجيا التأمين (InsurTech),MGA,9.5/10,Managing General Agent,الوكيل العام الإداري
+الشحن البحري واللوجستيات العالمية (Maritime),BOL,10/10,Bill of Lading,بوليصة الشحن
+الشحن البحري واللوجستيات العالمية (Maritime),TEU,10/10,Twenty-foot Equivalent Unit,وحدة مكافئة لعشرين قدماً (قياس الحاويات)
+الشحن البحري واللوجستيات العالمية (Maritime),FEU,9.5/10,Forty-foot Equivalent Unit,وحدة مكافئة لأربعين قدماً
+الشحن البحري واللوجستيات العالمية (Maritime),FOB,10/10,Free on Board,التسليم على ظهر السفينة
+الشحن البحري واللوجستيات العالمية (Maritime),CIF,10/10,Cost Insurance and Freight,التكلفة والتأمين والشحن
+الشحن البحري واللوجستيات العالمية (Maritime),EXW,9.5/10,Ex Works,التسليم في موقع البائع
+الشحن البحري واللوجستيات العالمية (Maritime),DDP,9/10,Delivered Duty Paid,التسليم والرسوم مدفوعة
+الشحن البحري واللوجستيات العالمية (Maritime),DAP,9/10,Delivered at Place,التسليم في المكان المحدد
+الشحن البحري واللوجستيات العالمية (Maritime),FCL,10/10,Full Container Load,حمل حاوية كامل
+الشحن البحري واللوجستيات العالمية (Maritime),LCL,9.5/10,Less than Container Load,أقل من حمل حاوية
+الشحن البحري واللوجستيات العالمية (Maritime),RORO,10/10,Roll-on/Roll-off,سفن الدحرجة (لنقل السيارات)
+الشحن البحري واللوجستيات العالمية (Maritime),LOLO,8.5/10,Lift-on/Lift-off,سفن الرفع (بالرافعات)
+الشحن البحري واللوجستيات العالمية (Maritime),VLCC,9/10,Very Large Crude Carrier,ناقلة نفط خام كبيرة جداً
+الشحن البحري واللوجستيات العالمية (Maritime),ULCC,8.5/10,Ultra Large Crude Carrier,ناقلة نفط خام فائقة الضخامة
+الشحن البحري واللوجستيات العالمية (Maritime),BAF,8.5/10,Bunker Adjustment Factor,عامل تعديل أسعار الوقود
+الشحن البحري واللوجستيات العالمية (Maritime),CAF,8.5/10,Currency Adjustment Factor,عامل تعديل العملة
+الشحن البحري واللوجستيات العالمية (Maritime),ETD,9.5/10,Estimated Time of Departure,وقت المغادرة المتوقع
+الشحن البحري واللوجستيات العالمية (Maritime),POL,9/10,Port of Loading,ميناء التحميل
+الشحن البحري واللوجستيات العالمية (Maritime),OBL,9/10,Original Bill of Lading,بوليصة الشحن الأصلية
+الشحن البحري واللوجستيات العالمية (Maritime),VOCC,8.5/10,Vessel Operating Common Carrier,شركة نقل عامة مشغلة للسفن
+العمارة والهندسة والتشييد (AEC),AEC,10/10,Architecture Engineering Construction,العمارة والهندسة والتشييد
+العمارة والهندسة والتشييد (AEC),RFI,10/10,Request for Information,طلب معلومات (في المشاريع)
+العمارة والهندسة والتشييد (AEC),BOQ,10/10,Bill of Quantities,جدول الكميات
+العمارة والهندسة والتشييد (AEC),PERT,9/10,Program Evaluation and Review Technique,أسلوب تقييم ومراجعة المشروع
+العمارة والهندسة والتشييد (AEC),EPCM,9.5/10,Engineering Procurement and Construction Management,إدارة الهندسة والمشتريات والتشييد
+العمارة والهندسة والتشييد (AEC),EPC,10/10,Engineering Procurement and Construction,الهندسة والمشتريات والتشييد
+العمارة والهندسة والتشييد (AEC),PMP,10/10,Project Management Professional,محترف إدارة المشاريع
+العمارة والهندسة والتشييد (AEC),WBS,9.5/10,Work Breakdown Structure,هيكل تقسيم العمل
+العمارة والهندسة والتشييد (AEC),DWG,10/10,Drawing,مخطط أو رسم هندسي (صيغة ملفات أوتوكاد)
+العمارة والهندسة والتشييد (AEC),QMS,9.5/10,Quality Management System,نظام إدارة الجودة
+العمارة والهندسة والتشييد (AEC),GMP,9/10,Guaranteed Maximum Price,السعر الأقصى المضمون
+العمارة والهندسة والتشييد (AEC),LSTK,8.5/10,Lump Sum Turn Key,عقد تسليم مفتاح بمبلغ مقطوع
+العمارة والهندسة والتشييد (AEC),TBM,9/10,Tunnel Boring Machine,آلة حفر الأنفاق
+العمارة والهندسة والتشييد (AEC),VDC,9.5/10,Virtual Design and Construction,التصميم والتشييد الافتراضي
+العمارة والهندسة والتشييد (AEC),ASI,8.5/10,Architects Supplemental Instruction,التعليمات التكميلية للمهندس المعماري
+العمارة والهندسة والتشييد (AEC),PCO,8.5/10,Potential Change Order,أمر تغيير محتمل
+العمارة والهندسة والتشييد (AEC),TCO,9/10,Total Cost of Ownership,إجمالي تكلفة الملكية
+العمارة والهندسة والتشييد (AEC),NTP,9/10,Notice to Proceed,إشعار ببدء العمل
+العمارة والهندسة والتشييد (AEC),SUB,8.5/10,Submittal,المستندات المقدمة للاعتماد
+العمارة والهندسة والتشييد (AEC),BREEAM,8/10,Building Research Establishment Environmental Assessment Method,طريقة تقييم البيئة لمؤسسة بحوث البناء
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),MPOS,10/10,Mobile Point of Sale,نقطة بيع متنقلة
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),OOTD,10/10,Outfit of the Day,إطلالة اليوم (مشهورة جداً في انستجرام)
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),PRT,9/10,Pret-a-Porter,الملابس الجاهزة للارتداء
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),BOPIS,10/10,Buy Online Pick Up In Store,اشتري عبر الإنترنت واستلم من المتجر
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),BORIS,9.5/10,Buy Online Return In Store,اشتري عبر الإنترنت وأرجع في المتجر
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),POP,9.5/10,Point of Purchase,نقطة الشراء (أماكن العرض)
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),VMD,9/10,Visual Merchandising,الترويج المرئي (تنسيق المتاجر)
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),AOV,10/10,Average Order Value,متوسط قيمة الطلب
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),UPT,9/10,Units Per Transaction,الوحدات لكل معاملة شراء
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),GMR,8.5/10,Gross Margin Return,عائد الهامش الإجمالي
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),OTB,9/10,Open to Buy,الميزانية المفتوحة للشراء (في المتاجر)
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),MAP,9/10,Minimum Advertised Price,الحد الأدنى للسعر المعلن
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),RRP,9.5/10,Recommended Retail Price,سعر التجزئة الموصى به
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),PLM,10/10,Product Lifecycle Management,إدارة دورة حياة المنتج
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),RFID,10/10,Radio Frequency Identification,تحديد الهوية بموجات الراديو (تتبع المنتجات)
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),UPC,10/10,Universal Product Code,كود المنتج العالمي (الباركود)
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),EAN,9.5/10,European Article Number,رقم المقالة الأوروبية (باركود)
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),MOQ,10/10,Minimum Order Quantity,الحد الأدنى لكمية الطلب
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),CMF,9/10,Color Materials Finish,اللون والمواد والتشطيب (تصميم المنتجات)
+الأزياء والتجزئة وتكنولوجيا الموضة (Retail & Fashion),DNVB,9.5/10,Digitally Native Vertical Brand,العلامات التجارية الرقمية المستقلة
+الرياضة واللياقة البدنية (Sports & Wellness),HIIT,10/10,High-Intensity Interval Training,التدريب المتقطع عالي الكثافة
+الرياضة واللياقة البدنية (Sports & Wellness),BMR,9.5/10,Basal Metabolic Rate,معدل الأيض الأساسي (الحرق)
+الرياضة واللياقة البدنية (Sports & Wellness),TDEE,9/10,Total Daily Energy Expenditure,إجمالي إنفاق الطاقة اليومي
+الرياضة واللياقة البدنية (Sports & Wellness),LISS,8.5/10,Low-Intensity Steady State,الكارديو منخفض الكثافة
+الرياضة واللياقة البدنية (Sports & Wellness),WOD,10/10,Workout of the Day,تمرين اليوم (مشهور في الكروس فيت)
+الرياضة واللياقة البدنية (Sports & Wellness),PBR,9/10,Personal Best Record,أفضل رقم قياسي شخصي
+الرياضة واللياقة البدنية (Sports & Wellness),AMRAP,9.5/10,As Many Reps As Possible,أكبر عدد ممكن من التكرارات
+الرياضة واللياقة البدنية (Sports & Wellness),EMOM,9.5/10,Every Minute on the Minute,تمرين كل دقيقة
+الرياضة واللياقة البدنية (Sports & Wellness),DOMS,9/10,Delayed Onset Muscle Soreness,ألم العضلات متأخر الظهور
+الرياضة واللياقة البدنية (Sports & Wellness),RPE,9/10,Rate of Perceived Exertion,معدل الجهد الملحوظ
+الرياضة واللياقة البدنية (Sports & Wellness),ORM,9/10,One Rep Max,أقصى وزن لتكرار واحد
+الرياضة واللياقة البدنية (Sports & Wellness),HRV,10/10,Heart Rate Variability,تقلب معدل ضربات القلب (مهم للساعات الذكية)
+الرياضة واللياقة البدنية (Sports & Wellness),BCAA,10/10,Branched-Chain Amino Acids,الأحماض الأمينية متفرعة السلسلة (مكملات)
+الرياضة واللياقة البدنية (Sports & Wellness),WPC,8.5/10,Whey Protein Concentrate,بروتين مصل اللبن المركز
+الرياضة واللياقة البدنية (Sports & Wellness),WPI,8.5/10,Whey Protein Isolate,بروتين مصل اللبن المعزول
+الرياضة واللياقة البدنية (Sports & Wellness),TRF,9/10,Time-Restricted Feeding,التغذية المقيدة بالوقت (الصيام المتقطع)
+الرياضة واللياقة البدنية (Sports & Wellness),IIFYM,9.5/10,If It Fits Your Macros,نظام المرونة في الدايت (إذا ناسب الماكروز)
+الرياضة واللياقة البدنية (Sports & Wellness),PED,9/10,Performance-Enhancing Drug,العقاقير المنشطة للأداء
+الرياضة واللياقة البدنية (Sports & Wellness),MMA,10/10,Mixed Martial Arts,فنون القتال المختلطة
+الرياضة واللياقة البدنية (Sports & Wellness),BJJ,10/10,Brazilian Jiu-Jitsu,الجوجيتسو البرازيلية
