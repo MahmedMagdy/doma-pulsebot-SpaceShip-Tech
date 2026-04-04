@@ -932,7 +932,7 @@ async def emit_alert(
         app=app,
         domain_name=opportunity.domain,
         text=format_alert(opportunity, valuation),
-        parse_mode=str(ParseMode.HTML),
+        parse_mode=ParseMode.HTML,
         reply_markup=keyboard,
         disable_web_page_preview=True,
     )
@@ -980,7 +980,7 @@ async def emit_general_find_alert(
         app=app,
         domain_name=opportunity.domain,
         text=format_general_find_alert(opportunity),
-        parse_mode=str(ParseMode.HTML),
+        parse_mode=ParseMode.HTML,
         reply_markup=keyboard,
         disable_web_page_preview=True,
     )
@@ -1019,7 +1019,7 @@ async def emit_vip_alert(
         app=app,
         domain_name=opportunity.domain,
         text=format_vip_alert(opportunity, vip),
-        parse_mode=str(ParseMode.HTML),
+        parse_mode=ParseMode.HTML,
         reply_markup=keyboard,
         disable_web_page_preview=True,
     )
