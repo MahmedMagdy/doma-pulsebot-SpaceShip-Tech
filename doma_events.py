@@ -841,7 +841,7 @@ def _is_priority_tld_domain(domain: str) -> bool:
     return f".{clean.rpartition('.')[-1]}" in PRIORITY_TLDS
 
 
-def _parse_item_domain(item: dict[str, Any], fallback_domain: str = "") -> str:
+def _parse_item_domain(item: dict[str, Any]) -> str:
     for key in ("domain", "domainName", "name", "fqdn"):
         value = item.get(key)
         if isinstance(value, str) and value.strip():
@@ -850,8 +850,6 @@ def _parse_item_domain(item: dict[str, Any], fallback_domain: str = "") -> str:
     tld = _normalize_tld(str(item.get("tld") or item.get("zone") or "").strip().lower())
     if sld and tld:
         return f"{sld}{tld}"
-    if fallback_domain:
-        return str(fallback_domain).strip().lower()
     return ""
 
 
@@ -1264,7 +1262,6 @@ async def fetch_spaceship_domains(app: Application, chat_id: int) -> dict[str, i
             client = SpaceshipClient(session, cfg)
             vip_folder = Path(__file__).with_name("vip_data")
             active_vip_db = get_vip_database(vip_folder)
-            cfg.allowed_tlds = _effective_allowed_tlds(cfg)
             candidate_domains = build_candidate_domains(active_vip_db, cfg)
             if not candidate_domains:
                 summary = {
@@ -1292,7 +1289,7 @@ async def fetch_spaceship_domains(app: Application, chat_id: int) -> dict[str, i
             com_count = sum(1 for d in selected_domains if d.endswith(".com"))
             ae_count = sum(1 for d in selected_domains if d.endswith(".ae"))
             LOGGER.info(
-                "[INFO] Priority coverage this cycle: .com=%s .ae=%s (total=%s)",
+                "Priority coverage this cycle: .com=%s .ae=%s (total=%s)",
                 com_count,
                 ae_count,
                 len(selected_domains),
