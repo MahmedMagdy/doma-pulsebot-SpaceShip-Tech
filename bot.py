@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
-from doma_events import fetch_godaddy_domains, watch_events
+from doma_events import fetch_spaceship_domains, watch_events
 from dotenv import load_dotenv
 
 # 🔐 Load environment variables
@@ -187,7 +187,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<code>/stats</code> — Show watcher schedule status\n"
         "<code>/pause</code> — Pause polling loop (save API quota)\n"
         "<code>/resume</code> — Resume polling loop\n"
-        "<code>/force_scan</code> — Force immediate GoDaddy scan/evaluation",
+        "<code>/force_scan</code> — Force immediate Spaceship scan/evaluation",
         parse_mode="HTML",
     )
 
@@ -237,13 +237,13 @@ async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def force_scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    await update.message.reply_text("🚨 Forced scan started. Contacting GoDaddy now...", parse_mode="HTML")
+    await update.message.reply_text("🚨 Forced scan started. Contacting Spaceship API now...", parse_mode="HTML")
     checked = 0
     api_blocked_failed = 0
     vip = 0
     general = 0
     try:
-        summary = await fetch_godaddy_domains(context.application, chat_id)
+        summary = await fetch_spaceship_domains(context.application, chat_id)
         checked = int(summary.get("domains_checked", 0))
         api_blocked_failed = int(summary.get("api_blocked_failed", 0))
         vip = int(summary.get("vip_matches", 0))

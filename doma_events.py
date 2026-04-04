@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import email.utils
 import heapq
 import html
 import logging
@@ -20,21 +21,25 @@ from telegram.ext import Application
 from vip_database import VipRecord, get_vip_database, reload_vip_database
 
 LOGGER = logging.getLogger(__name__)
+
+# ─── Tuning constants ────────────────────────────────────────────────────────
 MIN_POLL_SECONDS = 1
 MIN_RETRY_ATTEMPTS = 1
 MIN_RETRY_BASE_SECONDS = 0.2
 MIN_BACKOFF_SECONDS = 1.0
 MIN_QUOTA_COOLDOWN_SECONDS = 30
 MIN_CIRCUIT_BREAKER_SECONDS = 30
-GODADDY_PRICE_MICROS_THRESHOLD = 100000
 DEFAULT_FALLBACK_ASK_PRICE_USD = 10.0
 WATCHER_ERROR_RETRY_SECONDS = 5
-STRICT_GODADDY_THROTTLE_SECONDS = 2
-GODADDY_BULK_BATCH_SIZE = 50
+
+# Spaceship-specific throttle / batch controls
+# ─ 2 s intra-batch delay as required; keep default 429-backoff seed here too
+SPACESHIP_INTRA_BATCH_DELAY_SECONDS = 2
+SPACESHIP_BULK_BATCH_SIZE = 50          # Spaceship bulk-check optimal batch size
 
 
-class GoDaddyCircuitOpenError(Exception):
-    """Raised when GoDaddy API calls are temporarily blocked by circuit breaker."""
+class SpaceshipCircuitOpenError(Exception):
+    """Raised when Spaceship API calls are temporarily blocked by circuit breaker."""
 
 
 @dataclass(frozen=True)
@@ -117,10 +122,14 @@ class WatcherConfig:
     )
     min_brandability_score: float = 35.0
     keyword_value_usd: float = 22.0
-    godaddy_api_base_url: str = "https://api.godaddy.com"
-    godaddy_api_key: str = ""
-    godaddy_api_secret: str = ""
-    godaddy_check_type: str = "FAST"
+    # ── Spaceship API credentials ──────────────────────────────────────────────
+    # Authentication: Spaceship uses a two-part Key + Secret scheme.
+    # Both are passed as individual HTTP headers on every request:
+    #   X-Api-Key:    <spaceship_api_key>
+    #   X-Api-Secret: <spaceship_api_secret>
+    spaceship_api_base_url: str = "https://spaceship.dev/api/v1"
+    spaceship_api_key: str = ""
+    spaceship_api_secret: str = ""
     proxy_url: str = ""
     human_delay_min_seconds: float = 0.8
     human_delay_max_seconds: float = 2.5
@@ -185,10 +194,9 @@ class WatcherConfig:
             or {"gibberish", "unbrandable", "unpronounceable", "nonsense", "meaningless", "awkward", "spammy"},
             min_brandability_score=float(os.getenv("MIN_BRANDABILITY_SCORE", "35")),
             keyword_value_usd=float(os.getenv("KEYWORD_VALUE_USD", "22")),
-            godaddy_api_base_url=os.getenv("GODADDY_API_BASE_URL", "https://api.godaddy.com").strip() or "https://api.godaddy.com",
-            godaddy_api_key=os.getenv("GODADDY_API_KEY", "").strip(),
-            godaddy_api_secret=os.getenv("GODADDY_API_SECRET", "").strip(),
-            godaddy_check_type=os.getenv("GODADDY_CHECK_TYPE", "FAST").strip() or "FAST",
+            spaceship_api_base_url=os.getenv("SPACESHIP_API_BASE_URL", "https://spaceship.dev/api/v1").strip() or "https://spaceship.dev/api/v1",
+            spaceship_api_key=os.getenv("SPACESHIP_API_KEY", "").strip(),
+            spaceship_api_secret=os.getenv("SPACESHIP_API_SECRET", "").strip(),
             proxy_url=os.getenv("PROXY_URL", "").strip(),
             human_delay_min_seconds=delay_min,
             human_delay_max_seconds=delay_max,
@@ -279,15 +287,16 @@ class AlertStore:
         self.conn.close()
 
 
-def validate_required_godaddy_config(cfg: WatcherConfig) -> None:
+def validate_required_spaceship_config(cfg: WatcherConfig) -> None:
+    """Raise ValueError if mandatory Spaceship API credentials are absent."""
     missing: list[str] = []
-    if not cfg.godaddy_api_key:
-        missing.append("GODADDY_API_KEY")
-    if not cfg.godaddy_api_secret:
-        missing.append("GODADDY_API_SECRET")
+    if not cfg.spaceship_api_key:
+        missing.append("SPACESHIP_API_KEY")
+    if not cfg.spaceship_api_secret:
+        missing.append("SPACESHIP_API_SECRET")
     if missing:
         missing_csv = ", ".join(missing)
-        raise ValueError(f"Missing required GoDaddy configuration: {missing_csv}")
+        raise ValueError(f"Missing required Spaceship configuration: {missing_csv}")
 
 
 def parse_float(value: Any) -> Optional[float]:
@@ -312,15 +321,17 @@ def parse_float(value: Any) -> Optional[float]:
         return None
 
 
-def _normalize_godaddy_price(raw_price: Any) -> Optional[float]:
+def _normalize_price(raw_price: Any) -> Optional[float]:
+    """
+    Parse and normalise an arbitrary price value to a non-negative USD float.
+
+    Returns None only when the value is unparseable or negative.
+    Zero is a valid price (free domain promotions) and is preserved as 0.0.
+    """
     parsed = parse_float(raw_price)
     if parsed is None:
         return None
-    # GoDaddy availability API may return large numeric prices in micros.
-    # This normalizes all values at/above threshold to USD by dividing by 1,000,000.
-    if parsed >= GODADDY_PRICE_MICROS_THRESHOLD:
-        return round(parsed / 1_000_000.0, 2)
-    return round(parsed, 2)
+    return round(parsed, 2) if parsed >= 0 else None
 
 
 def score_with_internal_rules(domain: str, cfg: WatcherConfig) -> tuple[float, float, str]:
@@ -407,19 +418,50 @@ def priority_score(domain: str, cfg: WatcherConfig, vip_db: dict[str, VipRecord]
     return score
 
 
-class GoDaddyClient:
+class SpaceshipClient:
+    """
+    Async HTTP client for the Spaceship Domain Availability API.
+
+    Authentication (two-part Key + Secret):
+    ─────────────────────────────────────────
+    Every request carries two custom headers:
+        X-Api-Key:    <SPACESHIP_API_KEY>
+        X-Api-Secret: <SPACESHIP_API_SECRET>
+
+    Bulk availability endpoint:
+        POST  {base_url}/domains/check
+        Body: {"domains": ["example.com", ...]}   (max 50 per call)
+
+    HTTP 429 handling (mandatory, non-crashing):
+        1.  Read the `Retry-After` response header (seconds or HTTP-date).
+        2.  If the header is absent, apply exponential back-off.
+        3.  Sleep, then automatically retry the failed batch.
+    """
+
     def __init__(self, session: aiohttp.ClientSession, cfg: WatcherConfig) -> None:
         self.session = session
         self.cfg = cfg
-        self._base_url = cfg.godaddy_api_base_url.rstrip("/")
+        self._base_url = cfg.spaceship_api_base_url.rstrip("/")
         self._quota_backoff_until_monotonic = 0.0
         self._circuit_failures = 0
         self._circuit_open_until_monotonic = 0.0
 
+    # ── Auth & helpers ────────────────────────────────────────────────────────
+
     def _headers(self) -> dict[str, str]:
+        """
+        Build Spaceship authentication headers.
+
+        Spaceship uses a two-part header scheme:
+            X-Api-Key:    your Spaceship API key
+            X-Api-Secret: your Spaceship API secret
+        Both values are available in your Spaceship account dashboard.
+        """
         return {
             "Accept": "application/json",
-            "Authorization": f"sso-key {self.cfg.godaddy_api_key}:{self.cfg.godaddy_api_secret}",
+            "Content-Type": "application/json",
+            "X-Api-Key": self.cfg.spaceship_api_key,
+            "X-Api-Secret": self.cfg.spaceship_api_secret,
         }
 
     async def _humanized_delay(self) -> None:
@@ -429,6 +471,8 @@ class GoDaddyClient:
                 self.cfg.human_delay_max_seconds,
             )
         )
+
+    # ── Circuit-breaker & quota helpers ──────────────────────────────────────
 
     def _note_rate_limit(self) -> None:
         loop = asyncio.get_running_loop()
@@ -461,11 +505,14 @@ class GoDaddyClient:
         return max(0, int(remaining))
 
     def _backoff_seconds(self, attempt: int) -> float:
+        """Exponential back-off with full jitter, capped at max_backoff_seconds."""
         capped_exponential = min(
             self.cfg.max_backoff_seconds,
             self.cfg.retry_base_seconds * (2 ** (attempt - 1)),
         )
         return random.uniform(0.0, max(capped_exponential, MIN_RETRY_BASE_SECONDS))
+
+    # ── Core request dispatcher ───────────────────────────────────────────────
 
     async def _request_json_with_retry(
         self,
@@ -476,12 +523,21 @@ class GoDaddyClient:
         json: Optional[Any] = None,
         context_label: str,
     ) -> Optional[Any]:
+        """
+        Send an HTTP request, retrying on transient errors and rate-limits.
+
+        HTTP 429 – Too Many Requests (mandatory, non-crashing):
+        ─────────────────────────────────────────────────────────
+        1.  Prefer the `Retry-After` header value (seconds) when present.
+        2.  Fall back to exponential back-off when the header is absent.
+        3.  Bot NEVER crashes; the failed batch is retried automatically.
+        """
         if not url:
             return None
 
         circuit_wait = self.circuit_open_remaining_seconds()
         if circuit_wait > 0:
-            raise GoDaddyCircuitOpenError(
+            raise SpaceshipCircuitOpenError(
                 f"{context_label} blocked by circuit breaker for {circuit_wait}s"
             )
 
@@ -489,7 +545,7 @@ class GoDaddyClient:
         for attempt in range(1, self.cfg.max_retry_attempts + 1):
             await self._humanized_delay()
             try:
-                print(">> CONTACTING GODADDY API NOW <<<")
+                LOGGER.debug(">> Contacting Spaceship API: %s %s", method, url)
                 async with self.session.request(
                     method,
                     url,
@@ -499,113 +555,146 @@ class GoDaddyClient:
                     proxy=self.cfg.proxy_url or None,
                 ) as response:
                     body = await response.text()
+
                     if response.status == 429:
+                        # ── Mandatory 429 handling ──────────────────────────
+                        # RFC 7231 allows Retry-After to be either:
+                        #   • An integer: number of seconds to wait
+                        #   • An HTTP-date string: e.g. "Sat, 05 Apr 2025 12:00:00 GMT"
+                        # We handle both formats; fall back to exponential
+                        # back-off when the header is absent or unparseable.
                         self._note_rate_limit()
                         self._note_retryable_failure()
+                        retry_after_raw = response.headers.get("Retry-After")
+                        wait_seconds: float = self._backoff_seconds(attempt)
+                        if retry_after_raw:
+                            try:
+                                # Try seconds (integer/float) first
+                                wait_seconds = float(retry_after_raw)
+                            except ValueError:
+                                # Fall back to RFC 7231 HTTP-date parsing
+                                try:
+                                    parsed_date = email.utils.parsedate_to_datetime(retry_after_raw)
+                                    delta = (parsed_date - datetime.now(timezone.utc)).total_seconds()
+                                    wait_seconds = max(0.0, delta)
+                                except Exception:
+                                    wait_seconds = self._backoff_seconds(attempt)
                         LOGGER.warning(
-                            "%s rate-limited (429) on %s; retrying in %.2fs",
+                            "%s rate-limited (429) on %s; pausing %.2fs before retry (attempt %s/%s)",
                             context_label,
                             url,
-                            STRICT_GODADDY_THROTTLE_SECONDS,
+                            wait_seconds,
+                            attempt,
+                            self.cfg.max_retry_attempts,
                         )
-                        await asyncio.sleep(STRICT_GODADDY_THROTTLE_SECONDS)
+                        await asyncio.sleep(wait_seconds)
                         continue
+
                     if 500 <= response.status < 600:
+                        wait_seconds = self._backoff_seconds(attempt)
                         self._note_retryable_failure()
                         LOGGER.warning(
-                            "%s upstream status=%s; retrying in %.2fs",
+                            "%s upstream status=%s; retrying in %.2fs (attempt %s/%s)",
                             context_label,
                             response.status,
-                            STRICT_GODADDY_THROTTLE_SECONDS,
+                            wait_seconds,
+                            attempt,
+                            self.cfg.max_retry_attempts,
                         )
-                        await asyncio.sleep(STRICT_GODADDY_THROTTLE_SECONDS)
+                        await asyncio.sleep(wait_seconds)
                         continue
-                    if response.status != 200:
+
+                    if response.status not in (200, 201):
                         raise RuntimeError(
                             f"{context_label} failed status={response.status} body={body[:300]}"
                         )
+                        # Note: Spaceship returns 200 for availability checks.
+                        # 201 (Created) is accepted defensively for any future
+                        # Spaceship endpoint variants that follow REST conventions.
+
                     try:
                         payload = await response.json(content_type=None)
                         self._note_success()
                         return payload
                     except Exception as exc:
-                        raise RuntimeError(f"{context_label} returned invalid JSON: {exc}") from exc
+                        raise RuntimeError(
+                            f"{context_label} returned invalid JSON: {exc}"
+                        ) from exc
+
             except aiohttp.ClientError as exc:
                 last_error = f"{type(exc).__name__}: {exc}"
+                wait_seconds = self._backoff_seconds(attempt)
                 self._note_retryable_failure()
                 LOGGER.info(
-                    "%s network error: %s; retrying in %.2fs",
+                    "%s network error: %s; retrying in %.2fs (attempt %s/%s)",
                     context_label,
                     exc,
-                    STRICT_GODADDY_THROTTLE_SECONDS,
+                    wait_seconds,
+                    attempt,
+                    self.cfg.max_retry_attempts,
                 )
-                await asyncio.sleep(STRICT_GODADDY_THROTTLE_SECONDS)
+                await asyncio.sleep(wait_seconds)
 
         if last_error:
             raise RuntimeError(f"{context_label} failed after retries: {last_error}")
         raise RuntimeError(f"{context_label} failed after retries")
 
-    async def check_domain_availability(self, domain: str) -> Optional[DomainOpportunity]:
-        url = f"{self._base_url}/v1/domains/available"
-        payload = await self._request_json_with_retry(
-            "GET",
-            url,
-            params={"domain": domain, "checkType": self.cfg.godaddy_check_type},
-            context_label="GoDaddy Domain Availability",
-        )
-        if not isinstance(payload, dict):
-            return None
+    # ── Domain availability ───────────────────────────────────────────────────
 
-        available = payload.get("available")
-        if isinstance(available, bool) and not available:
-            return None
+    async def check_domain_availability(self, domain: str) -> Optional["DomainOpportunity"]:
+        """
+        Check a single domain's availability via the Spaceship API.
 
-        normalized_domain = str(payload.get("domain") or domain).strip().lower()
-        if not normalized_domain or "." not in normalized_domain:
-            return None
-
-        ask_price = _normalize_godaddy_price(payload.get("price"))
-        if ask_price is None or ask_price <= 0:
-            LOGGER.warning(
-                "GoDaddy price missing/invalid for %s; using fallback ask price $%.2f",
-                normalized_domain,
-                DEFAULT_FALLBACK_ASK_PRICE_USD,
-            )
-            ask_price = DEFAULT_FALLBACK_ASK_PRICE_USD
-
-        status_text = str(payload.get("status") or "").strip() or "Available"
-
-        return DomainOpportunity(
-            domain=normalized_domain,
-            ask_price_usd=ask_price,
-            source="GoDaddy Availability API",
-            listing_url=f"https://www.godaddy.com/domainsearch/find?domainToCheck={normalized_domain}",
-            currency="USD",
-            availability_status=status_text,
-        )
-
-    async def check_domains_availability_bulk(self, domains: list[str]) -> tuple[list[DomainOpportunity], int]:
-        if not domains:
-            return [], 0
-
-        url = f"{self._base_url}/v1/domains/available"
+        Endpoint: POST {base_url}/domains/check
+        Body:     {"domains": ["<domain>"]}
+        """
+        url = f"{self._base_url}/domains/check"
         payload = await self._request_json_with_retry(
             "POST",
             url,
-            params={"checkType": self.cfg.godaddy_check_type},
+            json={"domains": [domain]},
+            context_label="Spaceship Domain Availability",
+        )
+        results = _extract_results_list(payload)
+        if not results:
+            return None
+        item = results[0] if isinstance(results[0], dict) else None
+        if item is None:
+            return None
+        return _parse_domain_item(item, domain)
+
+    async def check_domains_availability_bulk(
+        self, domains: list[str]
+    ) -> tuple[list["DomainOpportunity"], int]:
+        """
+        Bulk-check up to SPACESHIP_BULK_BATCH_SIZE domains in a single POST.
+
+        Endpoint: POST {base_url}/domains/check
+        Body:     {"domains": ["d1.com", "d2.ae", ...]}
+
+        Returns (opportunities, failed_count).
+        """
+        if not domains:
+            return [], 0
+
+        url = f"{self._base_url}/domains/check"
+        payload = await self._request_json_with_retry(
+            "POST",
+            url,
             json={"domains": domains},
-            context_label="GoDaddy Domain Availability Bulk",
+            context_label="Spaceship Domain Availability Bulk",
         )
 
-        if not isinstance(payload, list):
-            raise RuntimeError("GoDaddy bulk availability returned unexpected payload format")
+        results = _extract_results_list(payload)
+        if results is None:
+            raise RuntimeError("Spaceship bulk availability returned unexpected payload format")
 
         opportunities: list[DomainOpportunity] = []
         failed_count = 0
         normalized_input = {d.strip().lower() for d in domains if isinstance(d, str) and d.strip()}
         seen_domains: set[str] = set()
 
-        for item in payload:
+        for item in results:
             if not isinstance(item, dict):
                 continue
             normalized_domain = str(item.get("domain") or "").strip().lower()
@@ -620,32 +709,100 @@ class GoDaddyClient:
                 failed_count += 1
                 continue
 
-            ask_price = _normalize_godaddy_price(item.get("price"))
-            if ask_price is None or ask_price <= 0:
-                LOGGER.warning(
-                    "GoDaddy price missing/invalid for %s; using fallback ask price $%.2f",
-                    normalized_domain,
-                    DEFAULT_FALLBACK_ASK_PRICE_USD,
-                )
-                ask_price = DEFAULT_FALLBACK_ASK_PRICE_USD
-
-            status_text = str(item.get("status") or "").strip() or "Available"
-            opportunities.append(
-                DomainOpportunity(
-                    domain=normalized_domain,
-                    ask_price_usd=ask_price,
-                    source="GoDaddy Availability API",
-                    listing_url=f"https://www.godaddy.com/domainsearch/find?domainToCheck={normalized_domain}",
-                    currency="USD",
-                    availability_status=status_text,
-                )
-            )
+            opp = _parse_domain_item(item, normalized_domain)
+            if opp is not None:
+                opportunities.append(opp)
 
         if normalized_input:
             missing = normalized_input.difference(seen_domains)
             failed_count += len(missing)
 
         return opportunities, failed_count
+
+
+def _extract_results_list(payload: Any) -> Optional[list]:
+    """
+    Normalise a Spaceship API response to a plain list of domain-result dicts.
+
+    Spaceship may return either:
+      - A top-level JSON array:  [{"domain": ..., "available": ...}, ...]
+      - A wrapped object with any of these keys:
+          "results"  – primary documented key
+          "domains"  – alternate documented key
+          "data"     – common REST envelope pattern
+          "items"    – common pagination envelope pattern
+    Returns None if no recognisable list structure is found.
+    """
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("results", "domains", "data", "items"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return value
+    return None
+
+
+def _parse_domain_item(item: dict, fallback_domain: str) -> Optional["DomainOpportunity"]:
+    """
+    Convert a single Spaceship domain-check result dict into a DomainOpportunity.
+
+    Price extraction order (first non-None/non-negative value wins):
+      1. Flat scalar:              "price": 12.99
+      2. Nested "price" dict keys (in order): "listPrice", "yourPrice", "value"
+      3. Nested "purchasePrice" dict keys:     "value", "amount", "listPrice"
+
+    If no valid price is found, DEFAULT_FALLBACK_ASK_PRICE_USD is used.
+    A price of 0.0 (free domain promotion) is preserved as-is.
+    """
+    normalized_domain = str(item.get("domain") or fallback_domain).strip().lower()
+    if not normalized_domain or "." not in normalized_domain:
+        return None
+
+    # Extract price from whichever shape Spaceship sends (see docstring for priority order)
+    raw_price: Any = item.get("price")
+    if isinstance(raw_price, dict):
+        # Nested "price" dict: try "listPrice" → "yourPrice" → "value"
+        raw_price = (
+            raw_price.get("listPrice")
+            if raw_price.get("listPrice") is not None
+            else raw_price.get("yourPrice")
+            if raw_price.get("yourPrice") is not None
+            else raw_price.get("value")
+        )
+
+    purchase_price = item.get("purchasePrice")
+    if isinstance(purchase_price, dict) and raw_price is None:
+        # Nested "purchasePrice" dict: try "value" → "amount" → "listPrice"
+        raw_price = (
+            purchase_price.get("value")
+            if purchase_price.get("value") is not None
+            else purchase_price.get("amount")
+            if purchase_price.get("amount") is not None
+            else purchase_price.get("listPrice")
+        )
+
+    ask_price = _normalize_price(raw_price)
+    if ask_price is None:
+        # Price is missing or unparseable — use the configured fallback
+        LOGGER.warning(
+            "Spaceship price missing/invalid for %s; using fallback ask price $%.2f",
+            normalized_domain,
+            DEFAULT_FALLBACK_ASK_PRICE_USD,
+        )
+        ask_price = DEFAULT_FALLBACK_ASK_PRICE_USD
+
+    status_text = str(item.get("status") or "").strip() or "Available"
+    listing_url = f"https://www.spaceship.com/domain-name-search/?query={normalized_domain}"
+
+    return DomainOpportunity(
+        domain=normalized_domain,
+        ask_price_usd=ask_price,
+        source="Spaceship Availability API",
+        listing_url=listing_url,
+        currency="USD",
+        availability_status=status_text,
+    )
 
 
 async def evaluate_opportunity(
@@ -706,8 +863,8 @@ async def emit_alert(
     opportunity: DomainOpportunity,
     valuation: ValuationResult,
 ) -> None:
-    buy_url = f"https://www.godaddy.com/domainsearch/find?domainToCheck={opportunity.domain}"
-    rows = [[InlineKeyboardButton("🛒 Buy / Register on GoDaddy", url=buy_url)]]
+    buy_url = f"https://www.spaceship.com/domain-name-search/?query={opportunity.domain}"
+    rows = [[InlineKeyboardButton("🛒 Buy / Register on Spaceship", url=buy_url)]]
     if opportunity.listing_url.rstrip("/") != buy_url.rstrip("/"):
         rows.append([InlineKeyboardButton("🔗 Open Listing", url=opportunity.listing_url)])
     rows.append([InlineKeyboardButton("📊 Whois", url=opportunity.whois_url)])
@@ -753,8 +910,8 @@ async def emit_general_find_alert(
     chat_id: int,
     opportunity: DomainOpportunity,
 ) -> None:
-    buy_url = f"https://www.godaddy.com/domainsearch/find?domainToCheck={opportunity.domain}"
-    rows = [[InlineKeyboardButton("🛒 Review on GoDaddy", url=buy_url)]]
+    buy_url = f"https://www.spaceship.com/domain-name-search/?query={opportunity.domain}"
+    rows = [[InlineKeyboardButton("🛒 Review on Spaceship", url=buy_url)]]
     rows.append([InlineKeyboardButton("📊 Whois", url=opportunity.whois_url)])
     keyboard = InlineKeyboardMarkup(rows)
     await app.bot.send_message(
@@ -790,7 +947,7 @@ async def emit_vip_alert(
     opportunity: DomainOpportunity,
     vip: VipRecord,
 ) -> None:
-    buy_url = f"https://www.godaddy.com/domainsearch/find?domainToCheck={opportunity.domain}"
+    buy_url = f"https://www.spaceship.com/domain-name-search/?query={opportunity.domain}"
     rows = [[InlineKeyboardButton("🔗 BUY NOW / SNIPE", url=buy_url)]]
     keyboard = InlineKeyboardMarkup(rows)
     await app.bot.send_message(
@@ -881,15 +1038,15 @@ def select_circular_batch(items: list[str], cursor: int, batch_size: int) -> tup
 
 async def watch_events(app: Application, chat_id: int) -> None:
     cfg = WatcherConfig.from_env()
-    validate_required_godaddy_config(cfg)
+    validate_required_spaceship_config(cfg)
 
     LOGGER.info(
-        "Starting GoDaddy watcher (default_poll=%ss, eco=%ss, turbo=%ss, turbo_hours=%s, api_base=%s, proxy=%s, delay=%.2f-%.2fs)",
+        "Starting Spaceship watcher (default_poll=%ss, eco=%ss, turbo=%ss, turbo_hours=%s, api_base=%s, proxy=%s, delay=%.2f-%.2fs)",
         cfg.poll_seconds,
         cfg.eco_poll_seconds,
         cfg.turbo_poll_seconds,
         cfg.turbo_hours_utc,
-        cfg.godaddy_api_base_url,
+        cfg.spaceship_api_base_url,
         bool(cfg.proxy_url),
         cfg.human_delay_min_seconds,
         cfg.human_delay_max_seconds,
@@ -903,12 +1060,12 @@ async def watch_events(app: Application, chat_id: int) -> None:
         in_turbo = is_turbo_hour(now_utc, cfg)
         poll_seconds = current_poll_seconds(now_utc, cfg)
         try:
-            summary = await fetch_godaddy_domains(app, chat_id)
+            summary = await fetch_spaceship_domains(app, chat_id)
         except asyncio.CancelledError:
-            LOGGER.info("GoDaddy watcher cancelled.")
+            LOGGER.info("Spaceship watcher cancelled.")
             raise
         except Exception as exc:
-            LOGGER.exception("GoDaddy watcher cycle failed: %s", exc)
+            LOGGER.exception("Spaceship watcher cycle failed: %s", exc)
             await asyncio.sleep(WATCHER_ERROR_RETRY_SECONDS)
             continue
 
@@ -937,9 +1094,20 @@ async def watch_events(app: Application, chat_id: int) -> None:
             pass
 
 
-async def fetch_godaddy_domains(app: Application, chat_id: int) -> dict[str, int]:
+async def fetch_spaceship_domains(app: Application, chat_id: int) -> dict[str, int]:
+    """
+    Run one full scan cycle against the Spaceship API.
+
+    Batching & anti-ban controls:
+    ──────────────────────────────
+    • Domains are chunked into batches of SPACESHIP_BULK_BATCH_SIZE (50).
+    • An asyncio.sleep(SPACESHIP_INTRA_BATCH_DELAY_SECONDS) pause is inserted
+      between every consecutive batch to simulate natural traffic patterns.
+    • HTTP 429 responses are handled non-crashingly inside SpaceshipClient via
+      Retry-After / exponential back-off (see SpaceshipClient._request_json_with_retry).
+    """
     cfg = WatcherConfig.from_env()
-    validate_required_godaddy_config(cfg)
+    validate_required_spaceship_config(cfg)
     timeout = aiohttp.ClientTimeout(total=cfg.request_timeout_seconds)
     app.bot_data.setdefault("scan_cycle_counter", 0)
     app.bot_data.setdefault(
@@ -950,7 +1118,7 @@ async def fetch_godaddy_domains(app: Application, chat_id: int) -> dict[str, int
     store = AlertStore(cfg.db_path)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            client = GoDaddyClient(session, cfg)
+            client = SpaceshipClient(session, cfg)
             vip_folder = Path(__file__).with_name("vip_data")
             active_vip_db = get_vip_database(vip_folder)
             candidate_domains = build_candidate_domains(active_vip_db, cfg)
@@ -976,16 +1144,16 @@ async def fetch_godaddy_domains(app: Application, chat_id: int) -> dict[str, int
                 limit,
             )
             app.bot_data["domain_cursor"] = next_cursor
-            LOGGER.info("Fetching from GoDaddy: domains=%s", len(selected_domains))
+            LOGGER.info("Fetching from Spaceship API: domains=%s", len(selected_domains))
             opportunities: list[DomainOpportunity] = []
             api_blocked_failed = 0
-            for idx in range(0, len(selected_domains), GODADDY_BULK_BATCH_SIZE):
-                batch = selected_domains[idx : idx + GODADDY_BULK_BATCH_SIZE]
+            for idx in range(0, len(selected_domains), SPACESHIP_BULK_BATCH_SIZE):
+                batch = selected_domains[idx : idx + SPACESHIP_BULK_BATCH_SIZE]
                 try:
                     batch_opps, batch_failed = await client.check_domains_availability_bulk(batch)
                     opportunities.extend(batch_opps)
                     api_blocked_failed += int(batch_failed)
-                except GoDaddyCircuitOpenError as exc:
+                except SpaceshipCircuitOpenError as exc:
                     LOGGER.info("%s", exc)
                     api_blocked_failed += len(batch)
                 except Exception as exc:
@@ -996,9 +1164,10 @@ async def fetch_godaddy_domains(app: Application, chat_id: int) -> dict[str, int
                         exc,
                     )
                     api_blocked_failed += len(batch)
-                if idx + GODADDY_BULK_BATCH_SIZE < len(selected_domains):
-                    await asyncio.sleep(STRICT_GODADDY_THROTTLE_SECONDS)
-            LOGGER.info("Fetched %s domains from GoDaddy (available=%s)", len(selected_domains), len(opportunities))
+                # Intra-batch delay: simulate natural traffic; required anti-ban measure
+                if idx + SPACESHIP_BULK_BATCH_SIZE < len(selected_domains):
+                    await asyncio.sleep(SPACESHIP_INTRA_BATCH_DELAY_SECONDS)
+            LOGGER.info("Fetched %s domains from Spaceship (available=%s)", len(selected_domains), len(opportunities))
 
             chat_filters = app.bot_data.get("chat_filters", {})
             target_chat_ids = {chat_id}
