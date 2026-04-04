@@ -430,7 +430,7 @@ class SpaceshipClient:
 
     Bulk availability endpoint:
         POST  {base_url}/domains/available
-        Body: {"domains": ["example.com", ...]}   (max 50 per call)
+        Body: {"domains": ["example.com", ...]}   (max 20 per call)
 
     HTTP 429 handling (mandatory, non-crashing):
         1.  Read the `Retry-After` response header (seconds or HTTP-date).
@@ -701,6 +701,11 @@ class SpaceshipClient:
             if normalized_domain:
                 seen_domains.add(normalized_domain)
 
+            # Spaceship response variants observed in the wild:
+            # 1) {"available": true|false}
+            # 2) {"result": "available"|"unavailable"|"error"}
+            # 3) Legacy/fallback status-only shape with "status": "Available"
+            # We normalize all three to a single boolean for robust parsing.
             available = item.get("available")
             result = str(item.get("result") or "").strip().lower()
             is_available = (
