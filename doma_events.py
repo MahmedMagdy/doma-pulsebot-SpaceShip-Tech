@@ -22,6 +22,7 @@ from telegram.ext import Application
 from vip_database import VipRecord, get_vip_database, reload_vip_database
 
 LOGGER = logging.getLogger(__name__)
+logger = LOGGER
 
 # ─── Tuning constants ────────────────────────────────────────────────────────
 MAIN_CHAT_ID = '-1003736596502'
@@ -37,9 +38,6 @@ MIN_CIRCUIT_BREAKER_SECONDS = 30
 DEFAULT_FALLBACK_ASK_PRICE_USD = 10.0
 WATCHER_ERROR_RETRY_SECONDS = 5
 TARGET_TLDS = {".com", ".ai", ".dev"}
-AVAILABLE_BATCH_SIZE = 20
-available_domains_batch: list[str] = []
-available_domains_batch_lock: asyncio.Lock | None = None
 
 # Spaceship-specific throttle / batch controls
 # ─ 2 s intra-batch delay as required; keep default 429-backoff seed here too
@@ -149,12 +147,6 @@ class WatcherConfig:
 
     @classmethod
     def from_env(cls) -> "WatcherConfig":
-        raw_tlds = os.getenv("ALLOWED_TLDS", ".com,.ai,.dev")
-        allowed_tlds = {
-            t.strip().lower() if t.strip().startswith(".") else f".{t.strip().lower()}"
-            for t in raw_tlds.split(",")
-            if t.strip()
-        }
         human_delay_min = float(os.getenv("HUMAN_DELAY_MIN_SECONDS", "0.8"))
         human_delay_max = float(os.getenv("HUMAN_DELAY_MAX_SECONDS", "2.5"))
         delay_min = min(human_delay_min, human_delay_max)
@@ -170,13 +162,6 @@ class WatcherConfig:
             "gibberish,unbrandable,unpronounceable,nonsense,meaningless,awkward,spammy",
         )
         negative_keywords = {kw.strip().lower() for kw in raw_negative_keywords.split(",") if kw.strip()}
-        raw_general_find_tlds = os.getenv("GENERAL_FIND_TLDS", ".com,.ai,.dev")
-        general_find_tlds = {
-            t.strip().lower() if t.strip().startswith(".") else f".{t.strip().lower()}"
-            for t in raw_general_find_tlds.split(",")
-            if t.strip()
-        }
-
         return cls(
             poll_seconds=int(os.getenv("WATCHER_POLL_SECONDS", "30")),
             eco_poll_seconds=int(os.getenv("ECO_POLL_SECONDS", "120")),
@@ -196,7 +181,7 @@ class WatcherConfig:
             ),
             min_margin_usd=float(os.getenv("ARBITRAGE_MIN_GAP_USD", "20")),
             min_margin_ratio=float(os.getenv("ARBITRAGE_MIN_RATIO", "1.8")),
-            allowed_tlds=allowed_tlds or {".com", ".ai", ".dev"},
+            allowed_tlds=set(TARGET_TLDS),
             high_value_keywords=high_value_keywords
             or {"ai", "crypto", "cloud", "data", "dev", "app", "bot", "pay", "trade", "labs"},
             negative_keywords=negative_keywords
@@ -212,7 +197,7 @@ class WatcherConfig:
             vip_reload_seconds=max(60, int(os.getenv("VIP_RELOAD_SECONDS", "3600"))),
             scan_concurrency=max(1, int(os.getenv("SCAN_CONCURRENCY", "50"))),
             general_find_max_length=max(1, int(os.getenv("GENERAL_FIND_MAX_LENGTH", "5"))),
-            general_find_tlds=general_find_tlds or {".com", ".ai", ".dev"},
+            general_find_tlds=set(TARGET_TLDS),
         )
 
 
@@ -839,8 +824,8 @@ def _normalize_tld(value: str) -> str:
 
 
 def _effective_allowed_tlds(cfg: WatcherConfig) -> set[str]:
-    configured = {t for t in set(cfg.allowed_tlds).union(PRIORITY_TLDS) if t in TARGET_TLDS}
-    return configured or set(TARGET_TLDS)
+    _ = cfg
+    return set(TARGET_TLDS)
 
 
 def _is_priority_tld_domain(domain: str) -> bool:
@@ -918,39 +903,6 @@ def _domain_status_from_item(item: dict[str, Any]) -> tuple[bool, str]:
     return False, "Unavailable"
 
 
-def format_available_domains_batch_summary(domains: list[str]) -> str:
-    safe_domains = [html.escape(d) for d in domains[:AVAILABLE_BATCH_SIZE]]
-    lines = "\n".join(f"{idx}. <code>{domain}</code>" for idx, domain in enumerate(safe_domains, start=1))
-    count = len(safe_domains)
-    return (
-        f"📦 <b>VIP Available Domains Batch ({count})</b>\n"
-        f"تم رصد {count} دومين متاح:\n"
-        f"{lines}"
-    )
-
-
-async def send_batch_summary_notification(
-    app: Application,
-    domains: list[str],
-) -> bool:
-    payload: dict[str, Any] = {
-        "chat_id": int(MAIN_CHAT_ID),
-        "text": format_available_domains_batch_summary(domains),
-        "parse_mode": ParseMode.HTML,
-        "disable_web_page_preview": True,
-    }
-    while True:
-        try:
-            await app.bot.send_message(**payload)
-            await asyncio.sleep(1)
-            return True
-        except RetryAfter as e:
-            await asyncio.sleep(float(getattr(e, "retry_after", 1) or 1))
-        except Exception:
-            LOGGER.exception("Batch summary Telegram send failed chat_id=%s", payload["chat_id"])
-            return False
-
-
 async def evaluate_opportunity(
     opportunity: DomainOpportunity,
     cfg: WatcherConfig,
@@ -1017,46 +969,30 @@ async def send_telegram_notification(
     clean_domain = (domain_name or "").strip().lower().rstrip(".")
     _, _, ext = clean_domain.rpartition(".")
     tld = f".{ext}" if ext else ""
+    topic_id = TELEGRAM_TOPICS_MAP.get(tld)
+    if topic_id is None:
+        raise ValueError(f"No Telegram topic mapping for tld={tld or 'N/A'} domain={domain_name}")
 
-    base_payload: dict[str, Any] = {
+    payload: dict[str, Any] = {
         "chat_id": int(MAIN_CHAT_ID),
         "text": text,
         "parse_mode": parse_mode,
         "disable_web_page_preview": disable_web_page_preview,
+        "message_thread_id": topic_id,
     }
     if reply_markup is not None:
-        base_payload["reply_markup"] = reply_markup
-
-    mapped_thread_id = TELEGRAM_TOPICS_MAP.get(tld)
-    if mapped_thread_id is not None:
-        topic_payload = dict(base_payload)
-        topic_payload["message_thread_id"] = mapped_thread_id
-        while True:
-            try:
-                await app.bot.send_message(**topic_payload)
-                print(f"[SUCCESS] Sent to Topic {mapped_thread_id}")
-                await asyncio.sleep(1)
-                return
-            except RetryAfter as e:
-                await asyncio.sleep(float(getattr(e, "retry_after", 1) or 1))
-            except Exception:
-                break
+        payload["reply_markup"] = reply_markup
 
     while True:
         try:
-            await app.bot.send_message(**base_payload)
-            print("[FALLBACK] Thread failed, sent to General Group.")
+            await app.bot.send_message(**payload)
+            logger.info(f"✅ VERIFIED: Telegram VIP message successfully sent for {domain_name} to Topic ID {topic_id}")
             await asyncio.sleep(1)
             return
         except RetryAfter as e:
-            await asyncio.sleep(float(getattr(e, "retry_after", 1) or 1))
-        except Exception:
-            LOGGER.exception(
-                "Telegram fallback send failed chat_id=%s tld=%s domain=%s",
-                base_payload["chat_id"],
-                tld or "N/A",
-                domain_name,
-            )
+            await asyncio.sleep(e.retry_after)
+        except Exception as e:
+            logger.error(f"❌ FAILED to send {domain_name} to Telegram: {e}")
             raise
 
 
@@ -1318,9 +1254,6 @@ async def fetch_spaceship_domains(app: Application, chat_id: int) -> dict[str, i
       Retry-After / exponential back-off (see SpaceshipClient._request_json_with_retry).
     """
     cfg = WatcherConfig.from_env()
-    global available_domains_batch, available_domains_batch_lock
-    if available_domains_batch_lock is None:
-        available_domains_batch_lock = asyncio.Lock()
     validate_required_spaceship_config(cfg)
     timeout = aiohttp.ClientTimeout(total=cfg.request_timeout_seconds)
     app.bot_data.setdefault("scan_cycle_counter", 0)
@@ -1361,10 +1294,12 @@ async def fetch_spaceship_domains(app: Application, chat_id: int) -> dict[str, i
             LOGGER.info("Fetching from Spaceship API: domains=%s", len(selected_domains))
             com_count = sum(1 for d in selected_domains if d.endswith(".com"))
             ai_count = sum(1 for d in selected_domains if d.endswith(".ai"))
+            dev_count = sum(1 for d in selected_domains if d.endswith(".dev"))
             LOGGER.info(
-                "Priority coverage this cycle: .com=%s .ai=%s (total=%s)",
+                "Priority coverage this cycle: .com=%s .ai=%s .dev=%s (total=%s)",
                 com_count,
                 ai_count,
+                dev_count,
                 len(selected_domains),
             )
             opportunities: list[DomainOpportunity] = []
@@ -1435,52 +1370,16 @@ async def fetch_spaceship_domains(app: Application, chat_id: int) -> dict[str, i
                         if store.has_alerted(target_chat_id, opportunity.domain):
                             continue
                         try:
-                            domain_name = opportunity.domain
-                            vip_payload: dict[str, Any] = {
-                                "chat_id": int(MAIN_CHAT_ID),
-                                "text": format_vip_alert(opportunity, vip_record),
-                                "parse_mode": "HTML",
-                                "disable_web_page_preview": True,
-                            }
-                            while True:
-                                try:
-                                    await app.bot.send_message(**vip_payload)
-                                    break
-                                except RetryAfter as e:
-                                    await asyncio.sleep(e.retry_after)
-
+                            if opportunity.availability_status.strip().lower() != "available":
+                                continue
+                            await send_telegram_notification(
+                                app=app,
+                                domain_name=opportunity.domain,
+                                text=format_vip_alert(opportunity, vip_record),
+                                parse_mode=ParseMode.HTML,
+                                disable_web_page_preview=True,
+                            )
                             store.mark_alerted(target_chat_id, opportunity.domain, opportunity.source)
-                            async with available_domains_batch_lock:
-                                available_domains_batch.append(domain_name)
-                                domains_to_send = (
-                                    available_domains_batch[:AVAILABLE_BATCH_SIZE]
-                                    if len(available_domains_batch) >= AVAILABLE_BATCH_SIZE
-                                    else []
-                                )
-                            if domains_to_send:
-                                batch_payload: dict[str, Any] = {
-                                    "chat_id": int(MAIN_CHAT_ID),
-                                    "text": format_available_domains_batch_summary(domains_to_send),
-                                    "parse_mode": ParseMode.HTML,
-                                    "disable_web_page_preview": True,
-                                }
-                                batch_sent = False
-                                while True:
-                                    try:
-                                        await app.bot.send_message(**batch_payload)
-                                        batch_sent = True
-                                        break
-                                    except RetryAfter as e:
-                                        await asyncio.sleep(e.retry_after)
-                                    except Exception:
-                                        LOGGER.exception(
-                                            "Batch summary Telegram send failed chat_id=%s",
-                                            batch_payload["chat_id"],
-                                        )
-                                        break
-                                if batch_sent:
-                                    async with available_domains_batch_lock:
-                                        available_domains_batch.clear()
                             LOGGER.info(
                                 "VIP Telegram send success chat_id=%s domain=%s",
                                 target_chat_id,
