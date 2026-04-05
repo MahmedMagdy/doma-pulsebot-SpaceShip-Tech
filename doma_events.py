@@ -1447,7 +1447,7 @@ async def fetch_spaceship_domains(app: Application, chat_id: int) -> dict[str, i
                                     await app.bot.send_message(**vip_payload)
                                     break
                                 except RetryAfter as e:
-                                    await asyncio.sleep(float(getattr(e, "retry_after", 1) or 1))
+                                    await asyncio.sleep(e.retry_after)
 
                             store.mark_alerted(target_chat_id, opportunity.domain, opportunity.source)
                             async with available_domains_batch_lock:
@@ -1471,7 +1471,7 @@ async def fetch_spaceship_domains(app: Application, chat_id: int) -> dict[str, i
                                         batch_sent = True
                                         break
                                     except RetryAfter as e:
-                                        await asyncio.sleep(float(getattr(e, "retry_after", 1) or 1))
+                                        await asyncio.sleep(e.retry_after)
                                     except Exception:
                                         LOGGER.exception(
                                             "Batch summary Telegram send failed chat_id=%s",
