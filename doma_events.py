@@ -1435,24 +1435,50 @@ async def fetch_spaceship_domains(app: Application, chat_id: int) -> dict[str, i
                         if store.has_alerted(target_chat_id, opportunity.domain):
                             continue
                         try:
-                            await send_telegram_notification(
-                                app=app,
-                                domain_name=opportunity.domain,
-                                text=format_vip_alert(opportunity, vip_record),
-                                parse_mode="HTML",
-                                disable_web_page_preview=True,
-                            )
+                            domain_name = opportunity.domain
+                            vip_payload: dict[str, Any] = {
+                                "chat_id": int(MAIN_CHAT_ID),
+                                "text": format_vip_alert(opportunity, vip_record),
+                                "parse_mode": "HTML",
+                                "disable_web_page_preview": True,
+                            }
+                            while True:
+                                try:
+                                    await app.bot.send_message(**vip_payload)
+                                    break
+                                except RetryAfter as e:
+                                    await asyncio.sleep(e.retry_after)
+
                             store.mark_alerted(target_chat_id, opportunity.domain, opportunity.source)
                             async with available_domains_batch_lock:
-                                available_domains_batch.append(opportunity.domain)
+                                available_domains_batch.append(domain_name)
                                 domains_to_send = (
                                     available_domains_batch[:AVAILABLE_BATCH_SIZE]
                                     if len(available_domains_batch) >= AVAILABLE_BATCH_SIZE
                                     else []
                                 )
                             if domains_to_send:
-                                summary_sent = await send_batch_summary_notification(app, domains_to_send)
-                                if summary_sent:
+                                batch_payload: dict[str, Any] = {
+                                    "chat_id": int(MAIN_CHAT_ID),
+                                    "text": format_available_domains_batch_summary(domains_to_send),
+                                    "parse_mode": ParseMode.HTML,
+                                    "disable_web_page_preview": True,
+                                }
+                                batch_sent = False
+                                while True:
+                                    try:
+                                        await app.bot.send_message(**batch_payload)
+                                        batch_sent = True
+                                        break
+                                    except RetryAfter as e:
+                                        await asyncio.sleep(e.retry_after)
+                                    except Exception:
+                                        LOGGER.exception(
+                                            "Batch summary Telegram send failed chat_id=%s",
+                                            batch_payload["chat_id"],
+                                        )
+                                        break
+                                if batch_sent:
                                     async with available_domains_batch_lock:
                                         available_domains_batch.clear()
                             LOGGER.info(
