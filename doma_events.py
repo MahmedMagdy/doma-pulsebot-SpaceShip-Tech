@@ -1454,7 +1454,7 @@ async def fetch_spaceship_domains(app: Application, chat_id: int) -> dict[str, i
                                 summary_sent = await send_batch_summary_notification(app, domains_to_send)
                                 if summary_sent:
                                     async with available_domains_batch_lock:
-                                        del available_domains_batch[:AVAILABLE_BATCH_SIZE]
+                                        available_domains_batch.clear()
                             LOGGER.info(
                                 "VIP Telegram send success chat_id=%s domain=%s",
                                 target_chat_id,
