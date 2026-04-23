@@ -22,12 +22,22 @@ ENGLISH_LETTERS_RE = re.compile(r"[A-Za-z]")
 MULTI_HYPHEN_RE = re.compile(r"-{2,}")
 
 
+def _strip_trailing_me_suffixes(value: str) -> str:
+    clean = value
+    while clean.endswith(".me"):
+        clean = clean[:-3]
+    return clean
+
+
 def _extract_keyword_with_index(row: list[Any]) -> tuple[str, int]:
     if not isinstance(row, list):
         return "", -1
     for index, cell in enumerate(row):
         value = str(cell or "").strip()
-        if not ENGLISH_LETTERS_RE.search(value):
+        if len(value) <= 1 or not ENGLISH_LETTERS_RE.search(value):
+            continue
+        value = _strip_trailing_me_suffixes(value.lower().strip())
+        if len(value) <= 1:
             continue
         return value, index
     return "", -1
@@ -58,7 +68,7 @@ def sanitize_and_build_domain(raw_keyword: str) -> str:
     normalized = re.sub(r"\s+", "", str(raw_keyword or "").lower())
     if not normalized:
         return ""
-    base = normalized.removesuffix(".me")
+    base = _strip_trailing_me_suffixes(normalized)
     clean_base_word = re.sub(r"[^a-z0-9\-]", "", base)
     clean_base_word = MULTI_HYPHEN_RE.sub("-", clean_base_word).strip("-")
     if not clean_base_word:
