@@ -1,9 +1,10 @@
 import csv
 import logging
+import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 LOGGER = logging.getLogger(__name__)
 @dataclass(frozen=True)
@@ -17,29 +18,54 @@ class VipRecord:
 
 VIP_DATA_CACHE: dict[str, VipRecord] = {}
 VIP_DATA_LOCK = threading.Lock()
-ABBREVIATION_HEADER_TOKENS = {"الاختصار", "abbreviation"}
-HEADER_ROW_TOKENS = {
-    "الاختصار",
-    "abbreviation",
-    "القطاع",
-    "sector",
-    "التقييم",
-    "rating",
-    "المعنى بالإنجليزي",
-    "المعنى بالإنجليزية",
-    "meaning in english",
-    "المعنى بالعربي",
-    "المعنى بالعربية",
-    "meaning in arabic",
-}
-POSITIONAL_COLUMN_COUNT = 5
+ENGLISH_LETTERS_RE = re.compile(r"[A-Za-z]")
+MULTI_HYPHEN_RE = re.compile(r"-{2,}")
 
 
-def _first_header(headers: set[str], *candidates: str) -> Optional[str]:
-    for candidate in candidates:
-        if candidate in headers:
-            return candidate
-    return None
+def _extract_keyword_with_index(row: list[Any]) -> tuple[str, int]:
+    if not isinstance(row, list):
+        return "", -1
+    for index, cell in enumerate(row):
+        value = str(cell or "").strip()
+        if len(value) <= 1:
+            continue
+        if not ENGLISH_LETTERS_RE.search(value):
+            continue
+        return value, index
+    return "", -1
+
+
+def extract_keyword_from_row(row: list[Any]) -> str:
+    """
+    Header-agnostic keyword extraction from a raw CSV row.
+
+    Rules:
+    - Iterate cells left-to-right.
+    - Return the FIRST non-empty cell that has length > 1 and contains English letters.
+    - Ignore empty/symbol-only cells.
+    """
+    keyword, _ = _extract_keyword_with_index(row)
+    return keyword
+
+
+def sanitize_and_build_domain(raw_keyword: str) -> str:
+    """
+    Strictly sanitize user/raw keyword and return a safe .me domain.
+
+    - trim + lower
+    - remove trailing '.me' exactly once
+    - keep only [a-z0-9-]
+    - normalize repeated hyphens and edge hyphens
+    """
+    normalized = str(raw_keyword or "").strip().lower()
+    if not normalized:
+        return ""
+    base = normalized.removesuffix(".me")
+    clean_base_word = re.sub(r"[^a-z0-9\-]", "", base)
+    clean_base_word = MULTI_HYPHEN_RE.sub("-", clean_base_word).strip("-")
+    if not clean_base_word:
+        return ""
+    return f"{clean_base_word}.me"
 
 
 def load_vip_database(folder: Path) -> dict[str, VipRecord]:
@@ -58,103 +84,32 @@ def load_vip_database(folder: Path) -> dict[str, VipRecord]:
         try:
             with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
                 reader = csv.reader(handle)
-                all_rows = list(reader)
-                if not all_rows:
-                    continue
-
-                first = all_rows[0]
-                normalized_headers = {str(col).strip() for col in first}
-                has_named_headers = any(
-                    token in normalized_headers
-                    for token in (
-                        *ABBREVIATION_HEADER_TOKENS,
-                        "القطاع",
-                        "Sector",
-                        "التقييم",
-                        "Rating",
-                    )
-                )
-
-                if has_named_headers:
-                    handle.seek(0)
-                    dict_reader = csv.DictReader(handle)
-                    if not dict_reader.fieldnames:
-                        LOGGER.warning("Skipping VIP CSV without headers: %s", csv_path.name)
+                for row in reader:
+                    if not isinstance(row, list) or not row:
+                        continue
+                    raw_keyword, _keyword_index = _extract_keyword_with_index(row)
+                    full_domain = sanitize_and_build_domain(raw_keyword)
+                    if not full_domain:
+                        continue
+                    abbreviation = full_domain.removesuffix(".me")
+                    if not abbreviation:
                         continue
 
-                    headers = {header.strip() for header in dict_reader.fieldnames if isinstance(header, str)}
-                    abbr_key = _first_header(headers, "الاختصار", "Abbreviation")
-                    sector_key = _first_header(headers, "القطاع", "Sector")
-                    rating_key = _first_header(headers, "التقييم", "Rating")
-                    meaning_en_key = _first_header(
-                        headers,
-                        "المعنى بالإنجليزي",
-                        "المعنى بالإنجليزية",
-                        "Meaning in English",
-                    )
-                    meaning_ar_key = _first_header(
-                        headers,
-                        "المعنى بالعربي",
-                        "المعنى بالعربية",
-                        "Meaning in Arabic",
-                    )
-
-                    if abbr_key is None:
-                        LOGGER.warning("Skipping VIP CSV missing abbreviation column: %s", csv_path.name)
+                    if abbreviation in records:
+                        LOGGER.warning(
+                            "Duplicate VIP abbreviation '%s' in %s; keeping first occurrence",
+                            abbreviation,
+                            csv_path.name,
+                        )
                         continue
 
-                    for row in dict_reader:
-                        if not isinstance(row, dict):
-                            continue
-                        abbreviation = str(row.get(abbr_key) or "").strip().lower()
-                        if not abbreviation:
-                            continue
-
-                        if abbreviation in records:
-                            LOGGER.warning(
-                                "Duplicate VIP abbreviation '%s' in %s; keeping first occurrence",
-                                abbreviation,
-                                csv_path.name,
-                            )
-                            continue
-
-                        records[abbreviation] = VipRecord(
-                            abbreviation=abbreviation,
-                            sector=str(row.get(sector_key) or "").strip() if sector_key else "",
-                            rating=str(row.get(rating_key) or "").strip() if rating_key else "",
-                            meaning_en=str(row.get(meaning_en_key) or "").strip() if meaning_en_key else "",
-                            meaning_ar=str(row.get(meaning_ar_key) or "").strip() if meaning_ar_key else "",
-                        )
-                else:
-                    for idx, row in enumerate(all_rows):
-                        if len(row) < 1:
-                            continue
-                        if idx == 0:
-                            first_row_tokens = {
-                                str(col).strip().lower()
-                                for col in row[:POSITIONAL_COLUMN_COUNT]
-                            }
-                            if first_row_tokens & HEADER_ROW_TOKENS:
-                                continue
-                        abbreviation = str(row[0]).strip().lower()
-                        if not abbreviation:
-                            continue
-
-                        if abbreviation in records:
-                            LOGGER.warning(
-                                "Duplicate VIP abbreviation '%s' in %s; keeping first occurrence",
-                                abbreviation,
-                                csv_path.name,
-                            )
-                            continue
-
-                        records[abbreviation] = VipRecord(
-                            abbreviation=abbreviation,
-                            sector=str(row[1] if len(row) > 1 else "").strip(),
-                            rating=str(row[2] if len(row) > 2 else "").strip(),
-                            meaning_en=str(row[3] if len(row) > 3 else "").strip(),
-                            meaning_ar=str(row[4] if len(row) > 4 else "").strip(),
-                        )
+                    records[abbreviation] = VipRecord(
+                        abbreviation=abbreviation,
+                        sector="",
+                        rating="",
+                        meaning_en="",
+                        meaning_ar="",
+                    )
         except OSError as exc:
             LOGGER.warning("Failed reading VIP CSV %s: %s", csv_path.name, exc)
             continue

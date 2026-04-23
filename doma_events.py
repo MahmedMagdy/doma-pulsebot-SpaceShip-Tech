@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import csv
 import email.utils
 import heapq
 import html
@@ -38,11 +39,20 @@ MIN_CIRCUIT_BREAKER_SECONDS = 30
 DEFAULT_FALLBACK_ASK_PRICE_USD = 10.0
 WATCHER_ERROR_RETRY_SECONDS = 5
 TARGET_TLDS = {".com", ".ai", ".dev"}
+PROCESSED_STATUS_AVAILABLE = "Available"
+PROCESSED_STATUS_TAKEN = "Taken"
+PROCESSED_STATUS_ERROR_SKIPPED = "Error_Skipped"
+PROCESSED_STATUS_ALLOWED = {
+    PROCESSED_STATUS_AVAILABLE,
+    PROCESSED_STATUS_TAKEN,
+    PROCESSED_STATUS_ERROR_SKIPPED,
+}
 
 # Spaceship-specific throttle / batch controls
 # ─ 2 s intra-batch delay as required; keep default 429-backoff seed here too
 SPACESHIP_INTRA_BATCH_DELAY_SECONDS = 2
 SPACESHIP_BULK_BATCH_SIZE = 20          # Spaceship /domains/available max batch size
+DOMAIN_CHECK_RETRY_DELAY_SECONDS = 2
 
 
 class SpaceshipCircuitOpenError(Exception):
@@ -902,6 +912,117 @@ def _domain_status_from_item(item: dict[str, Any]) -> tuple[bool, str]:
     return False, "Unavailable"
 
 
+def log_to_processed_csv(base_keyword: str, full_domain: str, status: str) -> None:
+    """
+    Persist per-domain processing result to processed_domains.csv.
+
+    - Opens file in append mode.
+    - Auto-creates with header when absent.
+    - Status is constrained to: Available, Taken, Error_Skipped.
+    """
+    normalized_status = status if status in PROCESSED_STATUS_ALLOWED else PROCESSED_STATUS_ERROR_SKIPPED
+    output_path = Path(__file__).with_name("processed_domains.csv")
+    file_exists = output_path.exists()
+
+    with output_path.open("a", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        if not file_exists:
+            writer.writerow(["Keyword", "Full_Domain", "Status"])
+        writer.writerow(
+            [
+                str(base_keyword or "").strip(),
+                str(full_domain or "").strip().lower(),
+                normalized_status,
+            ]
+        )
+
+
+def _is_retryable_check_error(exc: Exception) -> bool:
+    if isinstance(exc, (aiohttp.ClientError, asyncio.TimeoutError)):
+        return True
+    if isinstance(exc, RuntimeError):
+        message = str(exc).lower()
+        # _request_json_with_retry raises RuntimeError text that may contain
+        # "status=<code>" for upstream HTTP failures. Treat 5xx as retryable.
+        has_5xx_status = bool(re.search(r"status=(5\d{2})", message))
+        return has_5xx_status or "timeout" in message
+    return False
+
+
+def _base_keyword_from_domain(full_domain: str) -> str:
+    clean_domain = str(full_domain or "").strip().lower()
+    if clean_domain.endswith(".me"):
+        return clean_domain.removesuffix(".me")
+    return clean_domain.split(".", 1)[0] if "." in clean_domain else clean_domain
+
+
+async def check_domains_with_single_retry(
+    client: "SpaceshipClient",
+    domains: list[str],
+) -> tuple[list["DomainOpportunity"], dict[str, str]]:
+    """
+    Check a batch once, then retry exactly one more time on retryable failures.
+
+    Returns:
+      (available_opportunities, status_by_domain)
+    where status_by_domain values are strictly one of:
+      Available, Taken, Error_Skipped.
+    """
+    normalized_domains = [
+        d.strip().lower()
+        for d in domains
+        if isinstance(d, str) and d.strip()
+    ]
+    if not normalized_domains:
+        return [], {}
+
+    async def _run_once() -> tuple[list["DomainOpportunity"], dict[str, str]]:
+        opportunities, failed_count = await client.check_domains_availability_bulk(normalized_domains)
+        if failed_count:
+            LOGGER.info(
+                "Bulk availability returned %s unresolved results in batch_size=%s",
+                failed_count,
+                len(normalized_domains),
+            )
+        available_domains = {op.domain.strip().lower() for op in opportunities}
+        status_map = {
+            domain: (
+                PROCESSED_STATUS_AVAILABLE
+                if domain in available_domains
+                else PROCESSED_STATUS_TAKEN
+            )
+            for domain in normalized_domains
+        }
+        return opportunities, status_map
+
+    try:
+        return await _run_once()
+    except Exception as first_error:
+        if not _is_retryable_check_error(first_error):
+            LOGGER.error(
+                "Non-retryable domain check failure for batch_size=%s domains=%s: %s",
+                len(normalized_domains),
+                normalized_domains[:3],
+                first_error,
+            )
+            return [], {domain: PROCESSED_STATUS_ERROR_SKIPPED for domain in normalized_domains}
+        LOGGER.error(
+            "Domain check failed; retrying once in %ss: %s",
+            DOMAIN_CHECK_RETRY_DELAY_SECONDS,
+            first_error,
+        )
+        await asyncio.sleep(DOMAIN_CHECK_RETRY_DELAY_SECONDS)
+        try:
+            return await _run_once()
+        except Exception as second_error:
+            LOGGER.error(
+                "Domain check failed after one retry; skipping batch_size=%s: %s",
+                len(normalized_domains),
+                second_error,
+            )
+            return [], {domain: PROCESSED_STATUS_ERROR_SKIPPED for domain in normalized_domains}
+
+
 async def evaluate_opportunity(
     opportunity: DomainOpportunity,
     cfg: WatcherConfig,
@@ -1305,21 +1426,17 @@ async def fetch_spaceship_domains(app: Application, chat_id: int) -> dict[str, i
             api_blocked_failed = 0
             for idx in range(0, len(selected_domains), SPACESHIP_BULK_BATCH_SIZE):
                 batch = selected_domains[idx : idx + SPACESHIP_BULK_BATCH_SIZE]
-                try:
-                    batch_opps, batch_failed = await client.check_domains_availability_bulk(batch)
-                    opportunities.extend(batch_opps)
-                    api_blocked_failed += int(batch_failed)
-                except SpaceshipCircuitOpenError as exc:
-                    LOGGER.info("%s", exc)
-                    api_blocked_failed += len(batch)
-                except Exception as exc:
-                    LOGGER.warning(
-                        "Availability bulk check failed for batch_start=%s size=%s: %s",
-                        idx,
-                        len(batch),
-                        exc,
-                    )
-                    api_blocked_failed += len(batch)
+                batch_opps, batch_statuses = await check_domains_with_single_retry(client, batch)
+                opportunities.extend(batch_opps)
+                for checked_domain in batch:
+                    clean_domain = str(checked_domain or "").strip().lower()
+                    if not clean_domain:
+                        continue
+                    base_keyword = _base_keyword_from_domain(clean_domain)
+                    status = batch_statuses.get(clean_domain, PROCESSED_STATUS_ERROR_SKIPPED)
+                    log_to_processed_csv(base_keyword, clean_domain, status)
+                    if status == PROCESSED_STATUS_ERROR_SKIPPED:
+                        api_blocked_failed += 1
                 # Intra-batch delay: simulate natural traffic; required anti-ban measure
                 if idx + SPACESHIP_BULK_BATCH_SIZE < len(selected_domains):
                     await asyncio.sleep(SPACESHIP_INTRA_BATCH_DELAY_SECONDS)
