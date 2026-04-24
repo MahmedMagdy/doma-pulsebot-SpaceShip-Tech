@@ -295,8 +295,6 @@ def _sanitize_strict_me_domain(raw_domain: Any) -> str:
         return ""
     if clean_domain.count(".me") != 1:
         return ""
-    if clean_domain.endswith(".me.me"):
-        return ""
     keyword = clean_domain[:-3]
     if not keyword or "." in keyword:
         return ""
