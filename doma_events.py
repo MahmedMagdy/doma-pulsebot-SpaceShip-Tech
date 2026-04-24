@@ -50,6 +50,9 @@ SPACESHIP_BULK_BATCH_SIZE = 20          # Spaceship /domains/available max batch
 SPACESHIP_API_SINGLE_RETRY_DELAY_SECONDS = 3
 SPACESHIP_API_MAX_ATTEMPTS = 4
 SPACESHIP_STUBBORN_RETRY_ATTEMPTS = 6
+SPACESHIP_STUBBORN_MAX_BACKOFF_SECONDS = 32
+DEFAULT_STATUS_EMOJI = "🟡"
+PRICE_VERIFICATION_FAILED_TEXT = "Verification Failed - Check Manually!"
 PROCESSED_CSV_LOCK = threading.Lock()
 
 
@@ -59,6 +62,7 @@ class SpaceshipCircuitOpenError(Exception):
 
 @dataclass(frozen=True)
 class DomainOpportunity:
+    """Represents one available domain result; ask_price_usd=None means price verification failed."""
     domain: str
     ask_price_usd: Optional[float]
     domain_price: str
@@ -779,7 +783,7 @@ def _parse_domain_item(item: dict, fallback_domain: str) -> Optional["DomainOppo
     verified_price = get_verified_price_v3(item, normalized_domain)
     ask_price = verified_price
     if verified_price is None:
-        domain_price = "Verification Failed - Check Manually!"
+        domain_price = PRICE_VERIFICATION_FAILED_TEXT
     else:
         domain_price = f"{verified_price:.2f}"
 
@@ -974,7 +978,7 @@ async def check_domains_with_single_retry(
                     error,
                 )
                 break
-            backoff_seconds = 2 ** attempt
+            backoff_seconds = min(2 ** attempt, SPACESHIP_STUBBORN_MAX_BACKOFF_SECONDS)
             LOGGER.warning(
                 "Stubborn retry for batch_size=%s after attempt %s/%s; waiting %ss: %s",
                 len(normalized_domains),
@@ -995,11 +999,14 @@ def format_available_alert(
     *,
     include_dollar_sign: bool = True,
 ) -> str:
-    clean_emoji = str(status_emoji or "🟡").strip() or "🟡"
+    clean_emoji = str(status_emoji).strip() if status_emoji is not None else DEFAULT_STATUS_EMOJI
+    if not clean_emoji:
+        clean_emoji = DEFAULT_STATUS_EMOJI
     clean_domain = html.escape(str(sanitized_domain or "").strip().lower())
     clean_price = html.escape(str(domain_price or "").strip())
     clean_link = html.escape(str(buy_link or "").strip(), quote=True)
-    price_line = f"💰 **Price:** `${clean_price}`" if include_dollar_sign else f"💰 **Price:** `{clean_price}`"
+    dollar_sign = "$" if include_dollar_sign else ""
+    price_line = f"💰 **Price:** `{dollar_sign}{clean_price}`"
     return (
         f"{clean_emoji} **Domain:** `{clean_domain}`\n"
         f"{price_line}\n"
@@ -1213,15 +1220,13 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                     sanitized_domain = _sanitize_strict_me_domain(opportunity.domain)
                     if not sanitized_domain:
                         continue
+                    domain_price = opportunity.domain_price
                     if opportunity.ask_price_usd is None:
-                        status_emoji = "🟡"
-                        domain_price = "Verification Failed - Check Manually!"
+                        status_emoji = DEFAULT_STATUS_EMOJI
                     elif opportunity.ask_price_usd <= MAX_SUITABLE_PRICE_USD:
                         status_emoji = "🟢"
-                        domain_price = f"{opportunity.ask_price_usd:.2f}"
                     else:
                         status_emoji = "🔴"
-                        domain_price = f"{opportunity.ask_price_usd:.2f}"
                     buy_link = f"https://www.spaceship.com/domain-search/?query={sanitized_domain}"
                     await send_telegram_notification(
                         app=app,
