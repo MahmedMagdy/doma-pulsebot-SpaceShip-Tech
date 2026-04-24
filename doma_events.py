@@ -49,6 +49,10 @@ SPACESHIP_INTRA_BATCH_DELAY_SECONDS = 2
 SPACESHIP_BULK_BATCH_SIZE = 20          # Spaceship /domains/available max batch size
 SPACESHIP_API_SINGLE_RETRY_DELAY_SECONDS = 3
 SPACESHIP_API_MAX_ATTEMPTS = 4
+SPACESHIP_STUBBORN_RETRY_ATTEMPTS = 6
+SPACESHIP_STUBBORN_MAX_BACKOFF_SECONDS = 32
+DEFAULT_STATUS_EMOJI = "🟡"
+PRICE_VERIFICATION_FAILED_TEXT = "Verification Failed - Check Manually!"
 PROCESSED_CSV_LOCK = threading.Lock()
 
 
@@ -58,8 +62,9 @@ class SpaceshipCircuitOpenError(Exception):
 
 @dataclass(frozen=True)
 class DomainOpportunity:
+    """Represents one available domain result; ask_price_usd=None means price verification failed."""
     domain: str
-    ask_price_usd: float
+    ask_price_usd: Optional[float]
     domain_price: str
     is_suitable: bool
     source: str
@@ -321,7 +326,7 @@ def _sanitize_strict_me_domain(raw_domain: Any) -> str:
 
 
 def _extract_numeric_values_from_price_node(node: Any, path: str) -> dict[int, set[str]]:
-    """Recursively collect normalized price candidates and their JSON paths."""
+    """Recursively collect normalized numeric candidates and their JSON paths."""
     prices: dict[int, set[str]] = {}
     if isinstance(node, dict):
         for key in ("registerPrice", "price", "amount", "value", "listPrice", "yourPrice"):
@@ -345,65 +350,99 @@ def _extract_numeric_values_from_price_node(node: Any, path: str) -> dict[int, s
     return prices
 
 
-# REPLACE HERE: Multi-layer primary price extractor
-def _primary_price_extractor(item: dict[str, Any]) -> dict[int, set[str]]:
-    """Extract candidate prices from primary expected root-level price keys."""
-    primary_candidates: dict[int, set[str]] = {}
-    for key in ("registerPrice", "price", "amount", "pricing"):
-        if key not in item:
-            continue
-        extracted = _extract_numeric_values_from_price_node(item.get(key), f"root.{key}")
-        for amount, paths in extracted.items():
-            primary_candidates.setdefault(amount, set()).update(paths)
-    return primary_candidates
+def _pick_lowest_price(candidates: dict[int, set[str]]) -> Optional[float]:
+    if not candidates:
+        return None
+    return round(min(candidates.keys()) / 100.0, 2)
 
 
-def _deep_collect_price_paths(node: Any, path: str = "root") -> dict[int, set[str]]:
-    """Deep-scan any JSON object for price-bearing keys and track discovery paths."""
+def _find_numeric_in_named_nodes(
+    node: Any,
+    target_keys: set[str],
+    *,
+    path: str = "root",
+) -> dict[int, set[str]]:
     candidates: dict[int, set[str]] = {}
     if isinstance(node, dict):
         for key, value in node.items():
             child_path = f"{path}.{key}"
-            if key in {"registerPrice", "price", "amount", "pricing"}:
+            if key in target_keys:
                 extracted = _extract_numeric_values_from_price_node(value, child_path)
                 for amount, paths in extracted.items():
                     candidates.setdefault(amount, set()).update(paths)
-            nested = _deep_collect_price_paths(value, child_path)
+            nested = _find_numeric_in_named_nodes(value, target_keys, path=child_path)
             for amount, paths in nested.items():
                 candidates.setdefault(amount, set()).update(paths)
     elif isinstance(node, list):
         for idx, value in enumerate(node):
-            nested = _deep_collect_price_paths(value, f"{path}[{idx}]")
+            nested = _find_numeric_in_named_nodes(value, target_keys, path=f"{path}[{idx}]")
             for amount, paths in nested.items():
                 candidates.setdefault(amount, set()).update(paths)
     return candidates
 
 
-# REPLACE HERE: Multi-layer secondary price verifier
-def _secondary_price_verifier(item: dict[str, Any]) -> dict[int, set[str]]:
-    """Secondary verifier that performs full-structure recursive price discovery."""
-    return _deep_collect_price_paths(item, "root")
+def _collect_all_raw_numeric_values(node: Any, path: str = "root") -> dict[int, set[str]]:
+    candidates: dict[int, set[str]] = {}
+    if isinstance(node, dict):
+        for key, value in node.items():
+            child_path = f"{path}.{key}"
+            parsed = _normalize_price(value)
+            if parsed is not None:
+                candidates.setdefault(_price_to_cents(parsed), set()).add(child_path)
+            nested = _collect_all_raw_numeric_values(value, child_path)
+            for amount, paths in nested.items():
+                candidates.setdefault(amount, set()).update(paths)
+    elif isinstance(node, list):
+        for idx, value in enumerate(node):
+            nested = _collect_all_raw_numeric_values(value, f"{path}[{idx}]")
+            for amount, paths in nested.items():
+                candidates.setdefault(amount, set()).update(paths)
+    else:
+        parsed = _normalize_price(node)
+        if parsed is not None:
+            candidates.setdefault(_price_to_cents(parsed), set()).add(path)
+    return candidates
 
 
-def _resolve_verified_price(item: dict[str, Any], domain: str) -> Optional[float]:
+def get_verified_price_v3(item: dict[str, Any], domain: str) -> Optional[float]:
     """
-    Resolve a single verified price when both extractors agree across multiple paths.
+    Triple-layer price extractor with mandatory fallback behavior.
 
-    Returns None when there is no verified candidate or ambiguous multi-price output.
+    Layer 1: root-level price/registerPrice/amount.
+    Layer 2: recursive scan under pricing/costs objects.
+    Layer 3: premium/raw numeric hunter across the full payload.
     """
-    primary = _primary_price_extractor(item)
-    secondary = _secondary_price_verifier(item)
-    verified_candidates: list[int] = []
-    for amount_cents, primary_paths in primary.items():
-        secondary_paths = secondary.get(amount_cents, set())
-        if not primary_paths or not secondary_paths:
+    layer1_candidates: dict[int, set[str]] = {}
+    for key in ("price", "registerPrice", "amount"):
+        if key not in item:
             continue
-        if len(primary_paths.union(secondary_paths)) >= 2:
-            verified_candidates.append(amount_cents)
-    if len(verified_candidates) != 1:
-        LOGGER.warning("Dropping %s due to unverified or ambiguous price paths", domain)
-        return None
-    return round(verified_candidates[0] / 100.0, 2)
+        parsed = _normalize_price(item.get(key))
+        if parsed is not None:
+            layer1_candidates.setdefault(_price_to_cents(parsed), set()).add(f"root.{key}")
+    layer1_price = _pick_lowest_price(layer1_candidates)
+    if layer1_price is not None:
+        return layer1_price
+
+    layer2_candidates = _find_numeric_in_named_nodes(item, {"pricing", "costs"})
+    layer2_price = _pick_lowest_price(layer2_candidates)
+    if layer2_price is not None:
+        return layer2_price
+
+    layer3_candidates = _collect_all_raw_numeric_values(item)
+    layer3_price = _pick_lowest_price(layer3_candidates)
+    if layer3_price is not None:
+        LOGGER.warning(
+            "Premium/raw fallback price used for %s from path(s): %s",
+            domain,
+            sorted(layer3_candidates[min(layer3_candidates.keys())]),
+        )
+        return layer3_price
+
+    LOGGER.warning(
+        "Price verification failed for available domain %s; forwarding with manual check warning",
+        domain,
+    )
+    return None
 
 
 class SpaceshipClient:
@@ -421,7 +460,8 @@ class SpaceshipClient:
         Body: {"domains": ["example.com", ...]}   (max 20 per call)
 
     HTTP/transient handling:
-        - Every API request gets exactly four attempts with a fixed 3-second retry delay.
+        - Every low-level HTTP request gets four attempts with fixed 3-second delay.
+        - Batch checks wrap this with a stubborn 6-attempt exponential retry loop.
     """
 
     def __init__(self, session: aiohttp.ClientSession, cfg: WatcherConfig) -> None:
@@ -722,10 +762,10 @@ def _parse_domain_item(item: dict, fallback_domain: str) -> Optional["DomainOppo
     """
     Convert a single Spaceship domain-check result dict into a DomainOpportunity.
 
-    Domain and pricing are accepted only when:
+    Domain and pricing are accepted when:
       - Domain is a strict .me format with exactly one ".me" extension.
-      - Price is verified by both primary and secondary extractors.
-      - Price is less than or equal to $50.00.
+      - Price is extracted via get_verified_price_v3 where possible.
+      - Unknown/expensive prices are still forwarded upstream for mandatory catch.
     """
     fallback_sanitized = _sanitize_strict_me_domain(fallback_domain)
     item_sanitized = _sanitize_strict_me_domain(_parse_item_domain(item))
@@ -740,14 +780,12 @@ def _parse_domain_item(item: dict, fallback_domain: str) -> Optional["DomainOppo
         )
         return None
 
-    # REPLACE HERE: strict multi-layer verified price + hard $50 kill switch
-    verified_price = _resolve_verified_price(item, normalized_domain)
-    if verified_price is None:
-        return None
-    if verified_price > MAX_SUITABLE_PRICE_USD:
-        return None
-    domain_price = f"{verified_price:.2f}"
+    verified_price = get_verified_price_v3(item, normalized_domain)
     ask_price = verified_price
+    if verified_price is None:
+        domain_price = PRICE_VERIFICATION_FAILED_TEXT
+    else:
+        domain_price = f"{verified_price:.2f}"
 
     status_text = str(item.get("status") or "").strip() or "Available"
     sanitized_domain = normalized_domain
@@ -757,7 +795,7 @@ def _parse_domain_item(item: dict, fallback_domain: str) -> Optional["DomainOppo
         domain=normalized_domain,
         ask_price_usd=ask_price,
         domain_price=domain_price,
-        is_suitable=True,
+        is_suitable=(ask_price is not None and ask_price <= MAX_SUITABLE_PRICE_USD),
         source="Spaceship Availability API",
         listing_url=buy_link,
         currency="USD",
@@ -892,7 +930,7 @@ async def check_domains_with_single_retry(
     domains: list[str],
 ) -> tuple[list["DomainOpportunity"], dict[str, str]]:
     """
-    Check a batch once. Each Spaceship API call performs four built-in attempts.
+    Check one batch with a stubborn 6-attempt wrapper retry policy.
 
     Returns:
       (available_opportunities, status_by_domain)
@@ -928,29 +966,50 @@ async def check_domains_with_single_retry(
         }
         return opportunities, status_map
 
-    try:
-        return await _run_once()
-    except Exception as error:
-        LOGGER.error(
-            "Domain check failed after four API attempts; skipping batch_size=%s: %s",
-            len(normalized_domains),
-            error,
-        )
-        return [], {domain: PROCESSED_STATUS_ERROR for domain in normalized_domains}
+    for attempt in range(1, SPACESHIP_STUBBORN_RETRY_ATTEMPTS + 1):
+        try:
+            return await _run_once()
+        except Exception as error:
+            if attempt >= SPACESHIP_STUBBORN_RETRY_ATTEMPTS:
+                LOGGER.error(
+                    "Domain check failed after %s stubborn attempts; batch_size=%s: %s",
+                    SPACESHIP_STUBBORN_RETRY_ATTEMPTS,
+                    len(normalized_domains),
+                    error,
+                )
+                break
+            backoff_seconds = min(2 ** attempt, SPACESHIP_STUBBORN_MAX_BACKOFF_SECONDS)
+            LOGGER.warning(
+                "Stubborn retry for batch_size=%s after attempt %s/%s; waiting %ss: %s",
+                len(normalized_domains),
+                attempt,
+                SPACESHIP_STUBBORN_RETRY_ATTEMPTS,
+                backoff_seconds,
+                error,
+            )
+            await asyncio.sleep(backoff_seconds)
+    return [], {domain: PROCESSED_STATUS_ERROR for domain in normalized_domains}
 
 
 def format_available_alert(
     sanitized_domain: str,
     domain_price: str,
-    is_suitable: bool,
+    status_emoji: str,
     buy_link: str,
+    *,
+    include_dollar_sign: bool = True,
 ) -> str:
+    clean_emoji = str(status_emoji).strip() if status_emoji is not None else DEFAULT_STATUS_EMOJI
+    if not clean_emoji:
+        clean_emoji = DEFAULT_STATUS_EMOJI
     clean_domain = html.escape(str(sanitized_domain or "").strip().lower())
     clean_price = html.escape(str(domain_price or "").strip())
     clean_link = html.escape(str(buy_link or "").strip(), quote=True)
+    dollar_sign = "$" if include_dollar_sign else ""
+    price_line = f"💰 **Price:** `{dollar_sign}{clean_price}`"
     return (
-        f"🟢 **Domain:** `{clean_domain}`\n"
-        f"💰 **Price:** `${clean_price}`\n"
+        f"{clean_emoji} **Domain:** `{clean_domain}`\n"
+        f"{price_line}\n"
         f"🛒 **Buy:** <a href=\"{clean_link}\">Open in Spaceship</a>"
     )
 
@@ -1085,7 +1144,8 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
     • Domains are chunked into batches of SPACESHIP_BULK_BATCH_SIZE (20).
     • An asyncio.sleep(SPACESHIP_INTRA_BATCH_DELAY_SECONDS) pause is inserted
       between every consecutive batch to simulate natural traffic patterns.
-    • Every Spaceship API request gets up to 4 attempts with 3-second retry delay.
+    • Every low-level request gets up to 4 attempts with 3-second retry delay.
+    • Every batch check is wrapped by a 6-attempt stubborn retry loop (2s, 4s, 8s...).
     """
     cfg = WatcherConfig.from_env()
     validate_required_spaceship_config(cfg)
@@ -1160,19 +1220,23 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                     sanitized_domain = _sanitize_strict_me_domain(opportunity.domain)
                     if not sanitized_domain:
                         continue
-                    if opportunity.ask_price_usd > MAX_SUITABLE_PRICE_USD:
-                        continue
                     domain_price = opportunity.domain_price
+                    if opportunity.ask_price_usd is None:
+                        status_emoji = DEFAULT_STATUS_EMOJI
+                    elif opportunity.ask_price_usd <= MAX_SUITABLE_PRICE_USD:
+                        status_emoji = "🟢"
+                    else:
+                        status_emoji = "🔴"
                     buy_link = f"https://www.spaceship.com/domain-search/?query={sanitized_domain}"
-                    # REPLACE HERE: final strict payload (sent only for validated available <= $50 domains)
                     await send_telegram_notification(
                         app=app,
                         domain_name=opportunity.domain,
                         text=format_available_alert(
                             sanitized_domain=sanitized_domain,
                             domain_price=domain_price,
-                            is_suitable=opportunity.is_suitable,
+                            status_emoji=status_emoji,
                             buy_link=buy_link,
+                            include_dollar_sign=opportunity.ask_price_usd is not None,
                         ),
                         parse_mode="HTML",
                         disable_web_page_preview=True,
