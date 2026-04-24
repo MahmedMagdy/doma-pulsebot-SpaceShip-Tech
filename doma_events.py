@@ -1,5 +1,6 @@
 import asyncio
 import csv
+import html
 import logging
 import os
 import random
@@ -58,6 +59,7 @@ class SpaceshipCircuitOpenError(Exception):
 class DomainOpportunity:
     domain: str
     ask_price_usd: float
+    domain_price: str
     source: str
     listing_url: str
     currency: str = "USD"
@@ -609,7 +611,56 @@ def _parse_domain_item(item: dict, fallback_domain: str) -> Optional["DomainOppo
     if not normalized_domain or "." not in normalized_domain:
         return None
 
-    # Extract price from whichever shape Spaceship sends (see docstring for priority order)
+    # Extract display price for Telegram payload from deep Spaceship JSON payloads.
+    domain_price = "Premium / Unknown Price"
+    parsed_domain_price: Optional[float] = None
+    try:
+        nested_price = item.get("price")
+        nested_register_price = item.get("registerPrice")
+        nested_purchase_price = item.get("purchasePrice")
+        candidate_blocks: list[dict[str, Any]] = [item]
+        for block in (nested_price, nested_register_price, nested_purchase_price):
+            if isinstance(block, dict):
+                candidate_blocks.append(block)
+
+        raw_domain_price: Any = None
+        price_currency = str(item.get("currency") or "").strip().upper()
+        for block in candidate_blocks:
+            for key in ("registerPrice", "price", "amount", "value", "listPrice", "yourPrice"):
+                candidate = block.get(key)
+                if isinstance(candidate, dict):
+                    amount = candidate.get("amount")
+                    if amount is None:
+                        amount = candidate.get("price")
+                    if amount is None:
+                        amount = candidate.get("value")
+                    if amount is not None:
+                        raw_domain_price = amount
+                        price_currency = str(
+                            candidate.get("currency")
+                            or block.get("currency")
+                            or item.get("currency")
+                            or ""
+                        ).strip().upper()
+                        break
+                elif candidate is not None:
+                    raw_domain_price = candidate
+                    price_currency = str(
+                        block.get("currency")
+                        or item.get("currency")
+                        or ""
+                    ).strip().upper()
+                    break
+            if raw_domain_price is not None:
+                break
+
+        parsed_domain_price = _normalize_price(raw_domain_price)
+        if parsed_domain_price is not None:
+            domain_price = f"{parsed_domain_price:.2f}"
+    except (KeyError, TypeError, ValueError, AttributeError):
+        domain_price = "Premium / Unknown Price"
+
+    # Extract numeric price from whichever shape Spaceship sends (see docstring for priority order)
     raw_price: Any = item.get("price")
     if isinstance(raw_price, dict):
         # Nested "price" dict: try "listPrice" → "yourPrice" → "value"
@@ -632,7 +683,7 @@ def _parse_domain_item(item: dict, fallback_domain: str) -> Optional["DomainOppo
             else purchase_price.get("listPrice")
         )
 
-    ask_price = _normalize_price(raw_price)
+    ask_price = parsed_domain_price if parsed_domain_price is not None else _normalize_price(raw_price)
     if ask_price is None:
         # Price is missing or unparseable — use the configured fallback
         LOGGER.warning(
@@ -643,13 +694,15 @@ def _parse_domain_item(item: dict, fallback_domain: str) -> Optional["DomainOppo
         ask_price = DEFAULT_FALLBACK_ASK_PRICE_USD
 
     status_text = str(item.get("status") or "").strip() or "Available"
-    listing_url = f"https://www.spaceship.com/domain-search/?query={normalized_domain}"
+    sanitized_domain = normalized_domain
+    buy_link = f"https://www.spaceship.com/domain-search/?query={sanitized_domain}"
 
     return DomainOpportunity(
         domain=normalized_domain,
         ask_price_usd=ask_price,
+        domain_price=domain_price,
         source="Spaceship Availability API",
-        listing_url=listing_url,
+        listing_url=buy_link,
         currency="USD",
         availability_status=status_text,
     )
@@ -827,9 +880,15 @@ async def check_domains_with_single_retry(
         return [], {domain: PROCESSED_STATUS_ERROR for domain in normalized_domains}
 
 
-def format_available_alert(raw_domain: str) -> str:
-    normalized_domain = str(raw_domain or "").strip().lower()
-    return f"🟢 AVAILABLE: {normalized_domain}"
+def format_available_alert(sanitized_domain: str, domain_price: str, buy_link: str) -> str:
+    clean_domain = html.escape(str(sanitized_domain or "").strip().lower())
+    clean_price = html.escape(str(domain_price or "").strip())
+    clean_link = html.escape(str(buy_link or "").strip(), quote=True)
+    return (
+        f"🟢 <b>Domain:</b> {clean_domain}\n"
+        f"💰 <b>Price:</b> ${clean_price}\n"
+        f"🛒 <b>Buy:</b> <a href=\"{clean_link}\">Open in Spaceship</a>"
+    )
 
 
 async def send_telegram_notification(
@@ -1034,10 +1093,13 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                         continue
                     if store.has_alerted(fixed_chat_id, opportunity.domain):
                         continue
+                    sanitized_domain = str(opportunity.domain or "").strip().lower()
+                    domain_price = opportunity.domain_price
+                    buy_link = f"https://www.spaceship.com/domain-search/?query={sanitized_domain}"
                     await send_telegram_notification(
                         app=app,
                         domain_name=opportunity.domain,
-                        text=format_available_alert(opportunity.domain),
+                        text=format_available_alert(sanitized_domain, domain_price, buy_link),
                         parse_mode="HTML",
                         disable_web_page_preview=True,
                     )
