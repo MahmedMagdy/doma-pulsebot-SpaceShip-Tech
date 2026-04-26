@@ -1,15 +1,16 @@
 import logging
 import asyncio
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-from doma_events import MAIN_CHAT_ID, TELEGRAM_TOPIC_ID, fetch_spaceship_domains, watch_events
-
-load_dotenv()
+load_dotenv(dotenv_path=Path(__file__).resolve().with_name(".env"))
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+
+from doma_events import MAIN_CHAT_ID, TELEGRAM_TOPIC_ID, fetch_spaceship_domains, watch_events
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
