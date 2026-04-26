@@ -43,15 +43,46 @@ PROCESSED_STATUS_ALLOWED = {
 }
 MAX_SUITABLE_PRICE_USD = 50.00
 PREMIUM_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
-    ("pricing", "premium", "register"),
-    ("pricing", "premium", "registerPrice"),
-    ("pricing", "premium", "price"),
-    ("pricing", "premium", "amount"),
+    ("price",),
+    ("registerPrice",),
     ("premiumPrice",),
-    ("premium", "register"),
-    ("premium", "registerPrice"),
+    ("premiumPrice", "amount"),
+    ("premiumPrice", "value"),
+    ("premiumPrice", "register"),
+    ("premiumPrice", "registerPrice"),
+    ("premium",),
     ("premium", "price"),
     ("premium", "amount"),
+    ("premium", "value"),
+    ("premium", "register"),
+    ("premium", "registerPrice"),
+    ("premium", "registration"),
+    ("premium", "registrationPrice"),
+    ("pricing", "premium", "register"),
+    ("pricing", "premium", "registerPrice"),
+    ("pricing", "premium", "registration"),
+    ("pricing", "premium", "registrationPrice"),
+    ("pricing", "premium", "price"),
+    ("pricing", "premium", "amount"),
+    ("pricing", "premium", "value"),
+    ("pricing", "premium", "amount", "value"),
+    ("pricing", "premium", "amount", "amount"),
+    ("pricing", "premiumPrice"),
+    ("pricing", "premiumPrice", "amount"),
+    ("pricing", "premiumPrice", "value"),
+    ("pricing", "premiumPrice", "register"),
+    ("pricing", "premiumPrice", "registerPrice"),
+    ("pricing", "registerPremium"),
+    ("pricing", "registerPremiumPrice"),
+    ("pricing", "price", "premium"),
+    ("pricing", "price", "premium", "amount"),
+    ("pricing", "price", "premium", "value"),
+    ("pricing", "registration", "premium"),
+    ("pricing", "registration", "premium", "amount"),
+    ("pricing", "registration", "premium", "value"),
+    ("pricing", "registration", "premiumPrice"),
+    ("pricing", "registration", "premiumPrice", "amount"),
+    ("pricing", "registration", "premiumPrice", "value"),
 )
 STANDARD_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
     ("pricing", "standard", "register"),
@@ -359,7 +390,16 @@ def _is_premium_domain_item(item: dict[str, Any]) -> bool:
         if isinstance(value, bool):
             return value
         if isinstance(value, str):
-            return value.strip().lower() in {"true", "1", "yes", "y", "premium"}
+            return value.strip().lower() in {
+                "true",
+                "1",
+                "yes",
+                "y",
+                "premium",
+                "is_premium",
+                "premium_domain",
+                "premiumdomain",
+            }
         if isinstance(value, (int, float)):
             return float(value) == 1.0
         return False
@@ -367,8 +407,20 @@ def _is_premium_domain_item(item: dict[str, Any]) -> bool:
     premium_flag_paths: tuple[tuple[str, ...], ...] = (
         ("isPremium",),
         ("premium",),
+        ("is_premium",),
+        ("premiumDomain",),
+        ("isPremiumDomain",),
         ("pricing", "isPremium"),
+        ("pricing", "premium"),
+        ("pricing", "is_premium"),
+        ("pricing", "premiumDomain"),
+        ("pricing", "isPremiumDomain"),
         ("pricing", "premium", "isPremium"),
+        ("pricing", "premium", "enabled"),
+        ("pricing", "premium", "active"),
+        ("pricing", "premium", "isActive"),
+        ("pricing", "price", "isPremium"),
+        ("pricing", "registration", "isPremium"),
     )
     for path in premium_flag_paths:
         if _is_truthy_flag(_read_dict_path(item, path)):
@@ -376,18 +428,44 @@ def _is_premium_domain_item(item: dict[str, Any]) -> bool:
 
     premium_tier_paths: tuple[tuple[str, ...], ...] = (
         ("tier",),
+        ("type",),
+        ("class",),
         ("pricing", "tier"),
+        ("pricing", "type"),
+        ("pricing", "class"),
         ("pricing", "premium", "tier"),
+        ("pricing", "premium", "type"),
         ("priceType",),
         ("pricing", "priceType"),
+        ("pricing", "registration", "tier"),
+        ("pricing", "registration", "type"),
     )
     for path in premium_tier_paths:
         tier_value = _read_dict_path(item, path)
-        if isinstance(tier_value, str) and tier_value.strip().lower() == "premium":
+        if isinstance(tier_value, str) and tier_value.strip().lower() in {
+            "premium",
+            "premium_domain",
+            "premiumdomain",
+        }:
             return True
 
-    # Final safety net: premium-specific registration price fields imply premium inventory.
-    if _extract_price_from_paths(item, PREMIUM_PRICE_PATHS) is not None:
+    premium_bucket = _read_dict_path(item, ("pricing", "premium"))
+    if isinstance(premium_bucket, dict):
+        if any(_coerce_non_negative_price(v) is not None for v in premium_bucket.values()):
+            return True
+    if isinstance(item.get("premium"), dict):
+        if any(_coerce_non_negative_price(v) is not None for v in item["premium"].values()):
+            return True
+
+    # Final safety net: premium-only price fields imply premium inventory.
+    premium_only_price_paths: tuple[tuple[str, ...], ...] = (
+        ("premiumPrice",),
+        ("premiumPrice", "amount"),
+        ("premium", "registerPrice"),
+        ("pricing", "premium", "registerPrice"),
+        ("pricing", "registerPremiumPrice"),
+    )
+    if _extract_price_from_paths(item, premium_only_price_paths) is not None:
         return True
 
     return False
@@ -437,7 +515,11 @@ def extract_spaceship_price(payload: Any, domain_name: str, is_premium: bool) ->
         return None
 
     if is_premium:
-        return _extract_price_from_paths(item, PREMIUM_PRICE_PATHS)
+        for path in PREMIUM_PRICE_PATHS:
+            parsed = _coerce_non_negative_price(_read_dict_path(item, path))
+            if parsed is not None:
+                return parsed
+        return None
     return _extract_price_from_paths(item, STANDARD_PRICE_PATHS)
 
 
@@ -1023,11 +1105,16 @@ def format_verification_failed_alert(
     clean_market_logic = html.escape(str(market_logic or "").strip()) or DEFAULT_MARKET_LOGIC
     clean_link = html.escape(str(buy_link or "").strip(), quote=True)
     premium_badge = " 💎 <b>[PREMIUM]</b>" if is_premium else ""
+    price_text = (
+        "⚠️ Premium Verified, Price Extraction Failed (Check Manually!)"
+        if is_premium
+        else f"⚠️ {PRICE_VERIFICATION_FAILED_TEXT}"
+    )
     return (
         f"🟡 <b>Domain:</b> {clean_domain}{premium_badge}\n"
         f"📂 <b>Niche:</b> {clean_category}\n"
         f"💡 <b>Market Logic:</b> {clean_market_logic}\n"
-        f"💰 <b>Price:</b> ⚠️ {PRICE_VERIFICATION_FAILED_TEXT}\n"
+        f"💰 <b>Price:</b> {price_text}\n"
         f"🛒 <b>Buy:</b> <a href=\"{clean_link}\">Open in Spaceship</a>"
     )
 
