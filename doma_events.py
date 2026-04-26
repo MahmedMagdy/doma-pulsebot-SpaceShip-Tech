@@ -1061,7 +1061,7 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
                 return [], {}
 
             def _normalize_header(header: Any) -> str:
-                # Intentionally strips punctuation/spacing to tolerate BOM artifacts and header style variance.
+                # Intentionally strips all non-alphanumeric chars to tolerate BOM artifacts and header style variance.
                 return re.sub(r"[^a-z0-9]", "", str(header or "").strip().lower())
 
             def _pick_index(
@@ -1094,6 +1094,7 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
                     sorted(duplicate_headers),
                 )
 
+            # "domain_name", "domain name", and "domain-name" all normalize to "domainname".
             domain_idx = _pick_index(normalized_index_map, ("domain", "domainname"), 0)
             keyword_idx = _pick_index(normalized_index_map, ("keyword",), 1)
             category_idx = _pick_index(normalized_index_map, ("category", "niche", "nichecategory"), 2)
