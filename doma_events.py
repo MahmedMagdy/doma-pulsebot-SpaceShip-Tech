@@ -1061,6 +1061,7 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
                 return [], {}
 
             def _normalize_header(header: Any) -> str:
+                # Intentionally strips punctuation/spacing to tolerate BOM/mojibake CSV headers.
                 return re.sub(r"[^a-z0-9]", "", str(header or "").strip().lower())
 
             def _pick_index(
@@ -1126,7 +1127,6 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
                 metadata_by_domain[sanitized_domain] = {
                     "category": category,
                     "market_logic": market_logic,
-                    "logic": market_logic,
                 }
     except OSError as exc:
         LOGGER.warning("Unable to access tech targets CSV %s: %s", csv_path, exc)
