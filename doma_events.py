@@ -125,6 +125,19 @@ PREMIUM_TIER_PATHS: tuple[tuple[str, ...], ...] = (
     ("pricing", "registration", "tier"),
     ("pricing", "registration", "type"),
 )
+PREMIUM_FLAG_STRING_VALUES = frozenset(
+    {
+        "true",
+        "1",
+        "yes",
+        "y",
+        "premium",
+        "is_premium",
+        "premium_domain",
+        "premiumdomain",
+    }
+)
+PREMIUM_TIER_STRING_VALUES = frozenset({"premium", "premium_domain", "premiumdomain"})
 STANDARD_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
     ("pricing", "standard", "register"),
     ("pricing", "standard", "registerPrice"),
@@ -428,16 +441,7 @@ def _is_premium_flag_value(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
-        return value.strip().lower() in {
-            "true",
-            "1",
-            "yes",
-            "y",
-            "premium",
-            "is_premium",
-            "premium_domain",
-            "premiumdomain",
-        }
+        return value.strip().lower() in PREMIUM_FLAG_STRING_VALUES
     if isinstance(value, (int, float)):
         return float(value) == 1.0
     return False
@@ -452,11 +456,7 @@ def _has_explicit_premium_marker(node: dict[str, Any]) -> bool:
             return True
     for path in PREMIUM_TIER_PATHS:
         tier_value = _read_dict_path(node, path)
-        if isinstance(tier_value, str) and tier_value.strip().lower() in {
-            "premium",
-            "premium_domain",
-            "premiumdomain",
-        }:
+        if isinstance(tier_value, str) and tier_value.strip().lower() in PREMIUM_TIER_STRING_VALUES:
             return True
     return False
 
@@ -472,13 +472,12 @@ def _is_premium_domain_item(item: dict[str, Any]) -> bool:
         """Return True when any direct nested value parses as a non-negative price."""
         if not isinstance(value, dict):
             return False
-        for nested_value in value.values():
-            if _coerce_non_negative_price(nested_value) is not None:
-                return True
-        return False
+        return any(_coerce_non_negative_price(nested_value) is not None for nested_value in value.values())
 
     premium_bucket = _read_dict_path(item, ("pricing", "premium"))
-    if _dict_contains_price(premium_bucket) or _dict_contains_price(item.get("premium")):
+    if _dict_contains_price(premium_bucket):
+        return True
+    if _dict_contains_price(item.get("premium")):
         return True
 
     # Final safety net: premium-only price fields imply premium inventory.
