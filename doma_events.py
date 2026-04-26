@@ -456,13 +456,17 @@ def _is_premium_domain_item(item: dict[str, Any]) -> bool:
         }:
             return True
 
+    def _dict_contains_price(value: Any) -> bool:
+        if not isinstance(value, dict):
+            return False
+        for nested_value in value.values():
+            if _coerce_non_negative_price(nested_value) is not None:
+                return True
+        return False
+
     premium_bucket = _read_dict_path(item, ("pricing", "premium"))
-    if isinstance(premium_bucket, dict):
-        if any(_coerce_non_negative_price(v) is not None for v in premium_bucket.values()):
-            return True
-    if isinstance(item.get("premium"), dict):
-        if any(_coerce_non_negative_price(v) is not None for v in item["premium"].values()):
-            return True
+    if _dict_contains_price(premium_bucket) or _dict_contains_price(item.get("premium")):
+        return True
 
     # Final safety net: premium-only price fields imply premium inventory.
     if _extract_price_from_paths(item, PREMIUM_ONLY_FLAG_PRICE_PATHS) is not None:
@@ -515,11 +519,7 @@ def extract_spaceship_price(payload: Any, domain_name: str, is_premium: bool) ->
         return None
 
     if is_premium:
-        for path in PREMIUM_PRICE_PATHS:
-            parsed = _coerce_non_negative_price(_read_dict_path(item, path))
-            if parsed is not None:
-                return parsed
-        return None
+        return _extract_price_from_paths(item, PREMIUM_PRICE_PATHS)
     return _extract_price_from_paths(item, STANDARD_PRICE_PATHS)
 
 
