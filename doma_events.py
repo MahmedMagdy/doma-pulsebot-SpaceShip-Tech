@@ -1042,7 +1042,7 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
             for row in reader:
                 raw_domain = str(row.get("Domain") or "").strip()
                 raw_keyword = str(row.get("Keyword") or "").strip().lower()
-                if not raw_domain and raw_keyword:
+                if not raw_domain and re.fullmatch(r"[a-z0-9-]+", raw_keyword or ""):
                     raw_domain = f"{raw_keyword}.tech"
                 sanitized_domain = _sanitize_strict_tech_domain(raw_domain)
                 if not sanitized_domain:
@@ -1214,7 +1214,7 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                     if not sanitized_domain:
                         continue
                     metadata = domain_metadata.get(sanitized_domain, {})
-                    has_metadata = sanitized_domain in domain_metadata
+                    is_metadata_backed = bool(metadata)
                     category = str(metadata.get("category") or "General Tech")
                     market_logic = str(metadata.get("logic") or "High-Value Keyword")
                     final_verified_price = opportunity.ask_price_usd
@@ -1231,7 +1231,7 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                             disable_web_page_preview=True,
                         )
                         store.mark_alerted(fixed_chat_id, opportunity.domain, opportunity.source)
-                        if has_metadata:
+                        if is_metadata_backed:
                             vip_match_count += 1
                         else:
                             general_match_count += 1
@@ -1259,7 +1259,7 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                         disable_web_page_preview=True,
                     )
                     store.mark_alerted(fixed_chat_id, opportunity.domain, opportunity.source)
-                    if has_metadata:
+                    if is_metadata_backed:
                         vip_match_count += 1
                     else:
                         general_match_count += 1
