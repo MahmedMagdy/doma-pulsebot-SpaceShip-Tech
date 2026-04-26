@@ -4,7 +4,7 @@ import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 LOGGER = logging.getLogger(__name__)
 @dataclass(frozen=True)
@@ -22,10 +22,10 @@ ENGLISH_LETTERS_RE = re.compile(r"[A-Za-z]")
 MULTI_HYPHEN_RE = re.compile(r"-{2,}")
 
 
-def _strip_trailing_me_suffixes(value: str) -> str:
+def _strip_trailing_tech_suffixes(value: str) -> str:
     clean = value
-    while clean.endswith(".me"):
-        clean = clean[:-3]
+    while clean.endswith(".tech"):
+        clean = clean[:-5]
     return clean
 
 
@@ -36,7 +36,7 @@ def _extract_keyword_with_index(row: list[Any]) -> tuple[str, int]:
         value = str(cell or "").strip()
         if not ENGLISH_LETTERS_RE.search(value):
             continue
-        value = _strip_trailing_me_suffixes(value.lower().strip())
+        value = _strip_trailing_tech_suffixes(value.lower().strip())
         if len(value) <= 1:
             continue
         return value, index
@@ -58,22 +58,22 @@ def extract_keyword_from_row(row: list[Any]) -> str:
 
 def sanitize_and_build_domain(raw_keyword: str) -> str:
     """
-    Strictly sanitize user/raw keyword and return a safe .me domain.
+    Strictly sanitize user/raw keyword and return a safe .tech domain.
 
     - trim + lower
-    - remove trailing '.me' exactly once
+    - remove trailing '.tech' exactly once
     - keep only [a-z0-9-]
     - normalize repeated hyphens and edge hyphens
     """
     normalized = re.sub(r"\s+", "", str(raw_keyword or "").lower())
     if not normalized:
         return ""
-    base = _strip_trailing_me_suffixes(normalized)
+    base = _strip_trailing_tech_suffixes(normalized)
     clean_base_word = re.sub(r"[^a-z0-9\-]", "", base)
     clean_base_word = MULTI_HYPHEN_RE.sub("-", clean_base_word).strip("-")
     if not clean_base_word:
         return ""
-    return f"{clean_base_word}.me"
+    return f"{clean_base_word}.tech"
 
 
 def load_vip_database(folder: Path) -> dict[str, VipRecord]:
@@ -99,7 +99,7 @@ def load_vip_database(folder: Path) -> dict[str, VipRecord]:
                     full_domain = sanitize_and_build_domain(raw_keyword)
                     if not full_domain:
                         continue
-                    abbreviation = full_domain.removesuffix(".me")
+                    abbreviation = full_domain.removesuffix(".tech")
                     if not abbreviation:
                         continue
 
