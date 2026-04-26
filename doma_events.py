@@ -1054,55 +1054,81 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
 
     try:
         with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.DictReader(handle, delimiter=",")
-            source_columns = reader.fieldnames or []
-            normalized_columns: dict[str, str] = {}
-            duplicate_normalized_columns: set[str] = set()
-            for name in source_columns:
-                normalized_name = str(name or "").strip().lower()
-                if not normalized_name:
-                    continue
-                if normalized_name in normalized_columns:
-                    duplicate_normalized_columns.add(normalized_name)
-                    continue
-                normalized_columns[normalized_name] = name
-            if duplicate_normalized_columns:
-                LOGGER.warning(
-                    "tech_targets.csv has duplicate column names after normalization: %s",
-                    sorted(duplicate_normalized_columns),
-                )
-                return [], {}
-            domain_column = normalized_columns.get("domain")
-            keyword_column = normalized_columns.get("keyword")
-            category_column = (
-                normalized_columns.get("niche")
-                or normalized_columns.get("category")
-                or normalized_columns.get("niche/category")
-            )
-            market_logic_column = normalized_columns.get("market logic")
-            if not domain_column or not category_column or not market_logic_column:
-                LOGGER.warning(
-                    "tech_targets.csv is missing required columns. expected=%s found=%s",
-                    ["Domain", "Niche (or Category or Niche/Category)", "Market Logic"],
-                    source_columns,
-                )
+            reader = csv.reader(handle, delimiter=",")
+            raw_headers = next(reader, [])
+            if not raw_headers:
+                LOGGER.warning("Tech targets CSV is empty: %s", csv_path)
                 return [], {}
 
+            def _normalize_header(header: Any) -> str:
+                # Intentionally strips all non-alphanumeric chars to tolerate BOM artifacts and header style variance.
+                return re.sub(r"[^a-z0-9]", "", str(header or "").strip().lower())
+
+            def _pick_index(
+                normalized_index_map: dict[str, int],
+                candidates: tuple[str, ...],
+                positional_fallback: int,
+            ) -> Optional[int]:
+                for candidate in candidates:
+                    idx = normalized_index_map.get(candidate)
+                    if idx is not None:
+                        return idx
+                if positional_fallback < len(raw_headers):
+                    return positional_fallback
+                return None
+
+            normalized_index_map: dict[str, int] = {}
+            duplicate_headers: set[str] = set()
+            for idx, header in enumerate(raw_headers):
+                normalized_name = _normalize_header(header)
+                if not normalized_name:
+                    continue
+                if normalized_name in normalized_index_map:
+                    duplicate_headers.add(normalized_name)
+                    continue
+                normalized_index_map[normalized_name] = idx
+
+            if duplicate_headers:
+                LOGGER.warning(
+                    "tech_targets.csv has duplicate headers after normalization: %s",
+                    sorted(duplicate_headers),
+                )
+
+            # "domain_name", "domain name", and "domain-name" all normalize to "domainname".
+            domain_idx = _pick_index(normalized_index_map, ("domain", "domainname"), 0)
+            keyword_idx = _pick_index(normalized_index_map, ("keyword",), 1)
+            category_idx = _pick_index(normalized_index_map, ("category", "niche", "nichecategory"), 2)
+            market_logic_idx = _pick_index(normalized_index_map, ("marketlogic", "logic", "market"), 3)
+
+            if domain_idx is None:
+                LOGGER.warning("tech_targets.csv missing domain column/header: %s", raw_headers)
+                return [], {}
+
+            def _cell(row_values: list[Any], index: Optional[int]) -> str:
+                if index is None or index >= len(row_values):
+                    return ""
+                return str(row_values[index] or "").strip()
+
             for row in reader:
-                raw_domain = str(row.get(domain_column) or "").strip()
-                raw_keyword = str(row.get(keyword_column) or "").strip().lower() if keyword_column else ""
-                if not raw_domain:
-                    if re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", raw_keyword or ""):
-                        raw_domain = f"{raw_keyword}.tech"
-                    else:
-                        continue
+                if not row or not any(str(value or "").strip() for value in row):
+                    continue
+
+                raw_domain = _cell(row, domain_idx)
+                raw_keyword = _cell(row, keyword_idx).lower()
+                if not raw_domain and re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", raw_keyword or ""):
+                    raw_domain = f"{raw_keyword}.tech"
+
                 sanitized_domain = _sanitize_strict_tech_domain(raw_domain)
                 if not sanitized_domain:
                     continue
-                category = str(row.get(category_column) or "").strip() or DEFAULT_TECH_CATEGORY
-                logic = str(row.get(market_logic_column) or "").strip() or DEFAULT_MARKET_LOGIC
+
+                category = _cell(row, category_idx) or DEFAULT_TECH_CATEGORY
+                market_logic = _cell(row, market_logic_idx) or DEFAULT_MARKET_LOGIC
                 domains.add(sanitized_domain)
-                metadata_by_domain[sanitized_domain] = {"category": category, "logic": logic}
+                metadata_by_domain[sanitized_domain] = {
+                    "category": category,
+                    "market_logic": market_logic,
+                }
     except OSError as exc:
         LOGGER.warning("Unable to access tech targets CSV %s: %s", csv_path, exc)
         return [], {}
@@ -1268,7 +1294,11 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                     metadata = domain_metadata.get(sanitized_domain)
                     is_metadata_backed = metadata is not None
                     category = str((metadata or {}).get("category") or DEFAULT_TECH_CATEGORY)
-                    market_logic = str((metadata or {}).get("logic") or DEFAULT_MARKET_LOGIC)
+                    market_logic = str(
+                        (metadata or {}).get("market_logic")
+                        or (metadata or {}).get("logic")
+                        or DEFAULT_MARKET_LOGIC
+                    )
                     final_verified_price = opportunity.ask_price_usd
                     if final_verified_price is None:
                         buy_link = f"https://www.spaceship.com/domain-search/?query={sanitized_domain}"
