@@ -85,11 +85,16 @@ PREMIUM_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
     ("price",),
 )
 PREMIUM_ONLY_FLAG_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
+    # Used only for premium-status confirmation (not general price extraction).
     ("premiumPrice",),
     ("premiumPrice", "amount"),
     ("premium", "registerPrice"),
     ("pricing", "premium", "registerPrice"),
     ("pricing", "registerPremiumPrice"),
+)
+PREMIUM_GENERIC_FALLBACK_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
+    ("registerPrice",),
+    ("price",),
 )
 STANDARD_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
     ("pricing", "standard", "register"),
@@ -393,6 +398,54 @@ def _is_premium_domain_item(item: dict[str, Any]) -> bool:
     if not isinstance(item, dict):
         return False
 
+    def _has_explicit_premium_marker(node: dict[str, Any]) -> bool:
+        """Return True when payload contains explicit premium flags/tier markers."""
+        premium_flag_paths: tuple[tuple[str, ...], ...] = (
+            ("isPremium",),
+            ("premium",),
+            ("is_premium",),
+            ("premiumDomain",),
+            ("isPremiumDomain",),
+            ("pricing", "isPremium"),
+            ("pricing", "premium"),
+            ("pricing", "is_premium"),
+            ("pricing", "premiumDomain"),
+            ("pricing", "isPremiumDomain"),
+            ("pricing", "premium", "isPremium"),
+            ("pricing", "premium", "enabled"),
+            ("pricing", "premium", "active"),
+            ("pricing", "premium", "isActive"),
+            ("pricing", "price", "isPremium"),
+            ("pricing", "registration", "isPremium"),
+        )
+        for path in premium_flag_paths:
+            if _is_truthy_flag(_read_dict_path(node, path)):
+                return True
+
+        premium_tier_paths: tuple[tuple[str, ...], ...] = (
+            ("tier",),
+            ("type",),
+            ("class",),
+            ("pricing", "tier"),
+            ("pricing", "type"),
+            ("pricing", "class"),
+            ("pricing", "premium", "tier"),
+            ("pricing", "premium", "type"),
+            ("priceType",),
+            ("pricing", "priceType"),
+            ("pricing", "registration", "tier"),
+            ("pricing", "registration", "type"),
+        )
+        for path in premium_tier_paths:
+            tier_value = _read_dict_path(node, path)
+            if isinstance(tier_value, str) and tier_value.strip().lower() in {
+                "premium",
+                "premium_domain",
+                "premiumdomain",
+            }:
+                return True
+        return False
+
     def _is_truthy_flag(value: Any) -> bool:
         if isinstance(value, bool):
             return value
@@ -411,52 +464,11 @@ def _is_premium_domain_item(item: dict[str, Any]) -> bool:
             return float(value) == 1.0
         return False
 
-    premium_flag_paths: tuple[tuple[str, ...], ...] = (
-        ("isPremium",),
-        ("premium",),
-        ("is_premium",),
-        ("premiumDomain",),
-        ("isPremiumDomain",),
-        ("pricing", "isPremium"),
-        ("pricing", "premium"),
-        ("pricing", "is_premium"),
-        ("pricing", "premiumDomain"),
-        ("pricing", "isPremiumDomain"),
-        ("pricing", "premium", "isPremium"),
-        ("pricing", "premium", "enabled"),
-        ("pricing", "premium", "active"),
-        ("pricing", "premium", "isActive"),
-        ("pricing", "price", "isPremium"),
-        ("pricing", "registration", "isPremium"),
-    )
-    for path in premium_flag_paths:
-        if _is_truthy_flag(_read_dict_path(item, path)):
-            return True
-
-    premium_tier_paths: tuple[tuple[str, ...], ...] = (
-        ("tier",),
-        ("type",),
-        ("class",),
-        ("pricing", "tier"),
-        ("pricing", "type"),
-        ("pricing", "class"),
-        ("pricing", "premium", "tier"),
-        ("pricing", "premium", "type"),
-        ("priceType",),
-        ("pricing", "priceType"),
-        ("pricing", "registration", "tier"),
-        ("pricing", "registration", "type"),
-    )
-    for path in premium_tier_paths:
-        tier_value = _read_dict_path(item, path)
-        if isinstance(tier_value, str) and tier_value.strip().lower() in {
-            "premium",
-            "premium_domain",
-            "premiumdomain",
-        }:
-            return True
+    if _has_explicit_premium_marker(item):
+        return True
 
     def _dict_contains_price(value: Any) -> bool:
+        """Return True when any direct nested value parses as a non-negative price."""
         if not isinstance(value, dict):
             return False
         for nested_value in value.values():
@@ -519,7 +531,42 @@ def extract_spaceship_price(payload: Any, domain_name: str, is_premium: bool) ->
         return None
 
     if is_premium:
-        return _extract_price_from_paths(item, PREMIUM_PRICE_PATHS)
+        def _is_truthy_flag(value: Any) -> bool:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                return value.strip().lower() in {"true", "1", "yes", "y", "premium"}
+            if isinstance(value, (int, float)):
+                return float(value) == 1.0
+            return False
+
+        explicit_premium_marker = any(
+            _is_truthy_flag(_read_dict_path(item, path))
+            for path in (
+                ("isPremium",),
+                ("is_premium",),
+                ("premiumDomain",),
+                ("isPremiumDomain",),
+                ("pricing", "isPremium"),
+                ("pricing", "premium", "isPremium"),
+            )
+        ) or any(
+            isinstance(tier_value, str) and tier_value.strip().lower() in {"premium", "premium_domain", "premiumdomain"}
+            for tier_value in (
+                _read_dict_path(item, ("tier",)),
+                _read_dict_path(item, ("priceType",)),
+                _read_dict_path(item, ("pricing", "tier")),
+                _read_dict_path(item, ("pricing", "priceType")),
+                _read_dict_path(item, ("pricing", "premium", "tier")),
+            )
+        )
+        for path in PREMIUM_PRICE_PATHS:
+            if (path in PREMIUM_GENERIC_FALLBACK_PRICE_PATHS) and (not explicit_premium_marker):
+                continue
+            parsed = _coerce_non_negative_price(_read_dict_path(item, path))
+            if parsed is not None:
+                return parsed
+        return None
     return _extract_price_from_paths(item, STANDARD_PRICE_PATHS)
 
 
