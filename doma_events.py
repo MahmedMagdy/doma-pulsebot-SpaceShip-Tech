@@ -68,7 +68,7 @@ STANDARD_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
 # Throttle math: target 95% of allowed request rate to stay safely below provider limits.
 SPACESHIP_REQUESTS_PER_MINUTE_LIMIT = 30
 SPACESHIP_TARGET_REQUESTS_PER_MINUTE = SPACESHIP_REQUESTS_PER_MINUTE_LIMIT * 0.95
-SPACESHIP_INTRA_BATCH_DELAY_SECONDS = round(60 / SPACESHIP_TARGET_REQUESTS_PER_MINUTE, 3)  # 2.105s
+SPACESHIP_INTRA_BATCH_DELAY_SECONDS = round(60 / SPACESHIP_TARGET_REQUESTS_PER_MINUTE, 3)  # ~2.105s
 SPACESHIP_BULK_BATCH_SIZE = 20  # Spaceship /domains/available max batch size
 SPACESHIP_API_SINGLE_RETRY_DELAY_SECONDS = 3
 SPACESHIP_API_MAX_ATTEMPTS = 4
@@ -80,8 +80,6 @@ TELEGRAM_MIN_MESSAGE_INTERVAL_SECONDS = round(60 / TELEGRAM_TARGET_MESSAGES_PER_
 DEFAULT_STATUS_EMOJI = "🟡"
 PRICE_VERIFICATION_FAILED_TEXT = "Verification Failed (Check Manually!)"
 PROCESSED_CSV_LOCK = threading.Lock()
-TELEGRAM_SEND_LOCK = asyncio.Lock()
-TELEGRAM_NEXT_ALLOWED_SEND_MONOTONIC = 0.0
 
 
 class SpaceshipCircuitOpenError(Exception):
@@ -1012,18 +1010,21 @@ async def send_telegram_notification(
         payload["reply_markup"] = reply_markup
 
     async def _respect_telegram_group_rate_limit() -> None:
-        global TELEGRAM_NEXT_ALLOWED_SEND_MONOTONIC
         loop = asyncio.get_running_loop()
-        async with TELEGRAM_SEND_LOCK:
+        lock = app.bot_data.get("_telegram_send_lock")
+        if not isinstance(lock, asyncio.Lock):
+            lock = asyncio.Lock()
+            app.bot_data["_telegram_send_lock"] = lock
+        async with lock:
+            next_allowed_send = float(app.bot_data.get("_telegram_next_allowed_send_monotonic", 0.0))
             now = loop.time()
-            wait_seconds = TELEGRAM_NEXT_ALLOWED_SEND_MONOTONIC - now
+            wait_seconds = next_allowed_send - now
             if wait_seconds > 0:
                 await asyncio.sleep(wait_seconds)
                 now = loop.time()
-            TELEGRAM_NEXT_ALLOWED_SEND_MONOTONIC = max(
-                TELEGRAM_NEXT_ALLOWED_SEND_MONOTONIC,
-                now,
-            ) + TELEGRAM_MIN_MESSAGE_INTERVAL_SECONDS
+            app.bot_data["_telegram_next_allowed_send_monotonic"] = (
+                now + TELEGRAM_MIN_MESSAGE_INTERVAL_SECONDS
+            )
 
     while True:
         try:
@@ -1055,7 +1056,22 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
         with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle, delimiter=",")
             source_columns = reader.fieldnames or []
-            normalized_columns = {str(name or "").strip().lower(): name for name in source_columns}
+            normalized_columns: dict[str, str] = {}
+            duplicate_normalized_columns: set[str] = set()
+            for name in source_columns:
+                normalized_name = str(name or "").strip().lower()
+                if not normalized_name:
+                    continue
+                if normalized_name in normalized_columns:
+                    duplicate_normalized_columns.add(normalized_name)
+                    continue
+                normalized_columns[normalized_name] = name
+            if duplicate_normalized_columns:
+                LOGGER.warning(
+                    "tech_targets.csv has duplicate column names after normalization: %s",
+                    sorted(duplicate_normalized_columns),
+                )
+                return [], {}
             domain_column = normalized_columns.get("domain")
             keyword_column = normalized_columns.get("keyword")
             category_column = (
@@ -1185,6 +1201,10 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
         "latest_scan_summary",
         {"domains_checked": 0, "vip_matches": 0, "general_finds": 0},
     )
+    if not isinstance(app.bot_data.get("_telegram_send_lock"), asyncio.Lock):
+        app.bot_data["_telegram_send_lock"] = asyncio.Lock()
+    if not isinstance(app.bot_data.get("_telegram_next_allowed_send_monotonic"), (int, float)):
+        app.bot_data["_telegram_next_allowed_send_monotonic"] = 0.0
 
     store = AlertStore(cfg.db_path)
     try:
