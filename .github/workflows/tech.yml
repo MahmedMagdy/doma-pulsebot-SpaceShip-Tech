@@ -1,0 +1,70 @@
+name: Ultimate Enterprise Tech Sniper Engine
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'
+
+# 🛡️ 1. نظام منع التداخل: لمنع تشغيل نسختين في نفس الوقت وتدمير الداتا بيز
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sniper-mission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 115 # ⏱️ 2. حماية الرصيد: إيقاف السيرفر إجبارياً قبل ما يكمل ساعتين عشان ميسحبش الحصة المجانية
+    permissions:
+      contents: write
+
+    steps:
+    - name: 1. 📥 Checkout Repository (Secure Depth)
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # سحب كل تاريخ المشروع لمنع أخطاء الرفع
+
+    - name: 2. 🐍 Set up Python 3.12 (Turbo Cache)
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: 'pip'
+
+    - name: 3. ⚙️ Install Mission Dependencies & Upgrade Core
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: 4. 🚀 Execute Sniper Engine (Unrestricted Stealth Mode)
+      env:
+        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        SPACESHIP_API_KEY: ${{ secrets.SPACESHIP_API_KEY }}
+        SPACESHIP_API_SECRET: ${{ secrets.SPACESHIP_API_SECRET }}
+      run: |
+        python bot.py
+
+    - name: 5. 📦 Backup State as GitHub Artifacts (Fail-Safe)
+      # 🗄️ 3. الصندوق الأسود: أخذ نسخة احتياطية من الداتا بيز والشيت حتى لو البوت ضرب إيرور
+      uses: actions/upload-artifact@v4
+      if: always() 
+      with:
+        name: sniper-memory-backup
+        path: |
+          alerts.db
+          processed_domains.csv
+          tech_targets.csv
+        retention-days: 7 # يحفظ النسخة دي لمدة 7 أيام وتقدر تحملها
+
+    - name: 6. 💾 Auto-Commit & Push (Bulletproof Sync)
+      # 🧠 4. الرفع الذكي: يتأكد إن في تغيير حصل فعلاً، ويعمل دمج آمن عشان المشروع ميبصش
+      run: |
+        git config --global user.name "Sniper-AI-Architect"
+        git config --global user.email "architect@sniper.local"
+        git add alerts.db processed_domains.csv tech_targets.csv || echo "No files to add"
+        
+        if ! git diff-index --quiet HEAD; then
+          git commit -m "Auto-Save: Preserving domain state & DB [skip ci]"
+          git pull --rebase origin main
+          git push
+        else
+          echo "No state changes detected. Skipping push to save resources."
+        fi
