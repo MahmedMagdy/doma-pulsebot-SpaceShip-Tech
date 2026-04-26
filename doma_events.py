@@ -43,8 +43,6 @@ PROCESSED_STATUS_ALLOWED = {
 }
 MAX_SUITABLE_PRICE_USD = 50.00
 PREMIUM_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
-    ("price",),
-    ("registerPrice",),
     ("premiumPrice",),
     ("premiumPrice", "amount"),
     ("premiumPrice", "value"),
@@ -66,7 +64,6 @@ PREMIUM_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
     ("pricing", "premium", "amount"),
     ("pricing", "premium", "value"),
     ("pricing", "premium", "amount", "value"),
-    ("pricing", "premium", "amount", "amount"),
     ("pricing", "premiumPrice"),
     ("pricing", "premiumPrice", "amount"),
     ("pricing", "premiumPrice", "value"),
@@ -83,6 +80,16 @@ PREMIUM_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
     ("pricing", "registration", "premiumPrice"),
     ("pricing", "registration", "premiumPrice", "amount"),
     ("pricing", "registration", "premiumPrice", "value"),
+    # Rare APIs flatten premium value into generic fields; keep these as last-resort.
+    ("registerPrice",),
+    ("price",),
+)
+PREMIUM_ONLY_FLAG_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
+    ("premiumPrice",),
+    ("premiumPrice", "amount"),
+    ("premium", "registerPrice"),
+    ("pricing", "premium", "registerPrice"),
+    ("pricing", "registerPremiumPrice"),
 )
 STANDARD_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
     ("pricing", "standard", "register"),
@@ -458,14 +465,7 @@ def _is_premium_domain_item(item: dict[str, Any]) -> bool:
             return True
 
     # Final safety net: premium-only price fields imply premium inventory.
-    premium_only_price_paths: tuple[tuple[str, ...], ...] = (
-        ("premiumPrice",),
-        ("premiumPrice", "amount"),
-        ("premium", "registerPrice"),
-        ("pricing", "premium", "registerPrice"),
-        ("pricing", "registerPremiumPrice"),
-    )
-    if _extract_price_from_paths(item, premium_only_price_paths) is not None:
+    if _extract_price_from_paths(item, PREMIUM_ONLY_FLAG_PRICE_PATHS) is not None:
         return True
 
     return False
