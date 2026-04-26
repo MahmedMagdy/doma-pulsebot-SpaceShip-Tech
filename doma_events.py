@@ -31,6 +31,8 @@ MIN_CIRCUIT_BREAKER_SECONDS = 30
 DEFAULT_FALLBACK_ASK_PRICE_USD = 10.0
 WATCHER_ERROR_RETRY_SECONDS = 5
 TARGET_TLDS = {".tech"}
+DEFAULT_TECH_CATEGORY = "General Tech"
+DEFAULT_MARKET_LOGIC = "High-Value Keyword"
 PROCESSED_STATUS_AVAILABLE = "Available"
 PROCESSED_STATUS_TAKEN = "Taken"
 PROCESSED_STATUS_ERROR = "Error"
@@ -958,8 +960,8 @@ def format_available_alert(
 ) -> str:
     clean_domain = html.escape(str(sanitized_domain or "").strip().lower())
     clean_price = f"{final_verified_price:.2f}"
-    clean_category = html.escape(str(category or "").strip()) or "General Tech"
-    clean_market_logic = html.escape(str(market_logic or "").strip()) or "High-Value Keyword"
+    clean_category = html.escape(str(category or "").strip()) or DEFAULT_TECH_CATEGORY
+    clean_market_logic = html.escape(str(market_logic or "").strip()) or DEFAULT_MARKET_LOGIC
     clean_link = html.escape(str(buy_link or "").strip(), quote=True)
     return (
         f"🟢 <b>Domain:</b> {clean_domain}\n"
@@ -1043,15 +1045,15 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
                 raw_domain = str(row.get("Domain") or "").strip()
                 raw_keyword = str(row.get("Keyword") or "").strip().lower()
                 if not raw_domain:
-                    if re.fullmatch(r"[a-z0-9-]+", raw_keyword or ""):
+                    if re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", raw_keyword or ""):
                         raw_domain = f"{raw_keyword}.tech"
                     else:
                         continue
                 sanitized_domain = _sanitize_strict_tech_domain(raw_domain)
                 if not sanitized_domain:
                     continue
-                category = str(row.get("Category") or "").strip() or "General Tech"
-                logic = str(row.get("Market Logic") or "").strip() or "High-Value Keyword"
+                category = str(row.get("Category") or "").strip() or DEFAULT_TECH_CATEGORY
+                logic = str(row.get("Market Logic") or "").strip() or DEFAULT_MARKET_LOGIC
                 domains.add(sanitized_domain)
                 metadata_by_domain[sanitized_domain] = {"category": category, "logic": logic}
     except OSError as exc:
@@ -1216,10 +1218,10 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                     sanitized_domain = _sanitize_strict_tech_domain(opportunity.domain)
                     if not sanitized_domain:
                         continue
-                    metadata = domain_metadata.get(sanitized_domain, {})
-                    is_metadata_backed = sanitized_domain in domain_metadata
-                    category = str(metadata.get("category") or "General Tech")
-                    market_logic = str(metadata.get("logic") or "High-Value Keyword")
+                    metadata = domain_metadata.get(sanitized_domain)
+                    is_metadata_backed = metadata is not None
+                    category = str((metadata or {}).get("category") or DEFAULT_TECH_CATEGORY)
+                    market_logic = str((metadata or {}).get("logic") or DEFAULT_MARKET_LOGIC)
                     final_verified_price = opportunity.ask_price_usd
                     if final_verified_price is None:
                         buy_link = f"https://www.spaceship.com/domain-search/?query={sanitized_domain}"
