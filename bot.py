@@ -7,7 +7,10 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-load_dotenv(dotenv_path=Path(__file__).resolve().with_name(".env"))
+ENV_PATH = Path(__file__).resolve().with_name(".env")
+load_dotenv(dotenv_path=ENV_PATH)
+if not ENV_PATH.exists():
+    load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 from doma_events import MAIN_CHAT_ID, TELEGRAM_TOPIC_ID, fetch_spaceship_domains, watch_events

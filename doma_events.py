@@ -1103,17 +1103,17 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
                 LOGGER.warning("tech_targets.csv missing domain column/header: %s", raw_headers)
                 return [], {}
 
+            def _cell(row_values: list[Any], index: Optional[int]) -> str:
+                if index is None or index >= len(row_values):
+                    return ""
+                return str(row_values[index] or "").strip()
+
             for row in reader:
                 if not row or not any(str(value or "").strip() for value in row):
                     continue
 
-                def _cell(index: Optional[int]) -> str:
-                    if index is None or index >= len(row):
-                        return ""
-                    return str(row[index] or "").strip()
-
-                raw_domain = _cell(domain_idx)
-                raw_keyword = _cell(keyword_idx).lower()
+                raw_domain = _cell(row, domain_idx)
+                raw_keyword = _cell(row, keyword_idx).lower()
                 if not raw_domain and re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", raw_keyword or ""):
                     raw_domain = f"{raw_keyword}.tech"
 
@@ -1121,8 +1121,8 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
                 if not sanitized_domain:
                     continue
 
-                category = _cell(category_idx) or DEFAULT_TECH_CATEGORY
-                market_logic = _cell(market_logic_idx) or DEFAULT_MARKET_LOGIC
+                category = _cell(row, category_idx) or DEFAULT_TECH_CATEGORY
+                market_logic = _cell(row, market_logic_idx) or DEFAULT_MARKET_LOGIC
                 domains.add(sanitized_domain)
                 metadata_by_domain[sanitized_domain] = {
                     "category": category,
