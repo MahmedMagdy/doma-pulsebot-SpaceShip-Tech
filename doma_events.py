@@ -1053,7 +1053,7 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
         return [], {}
 
     def _normalize_header(name: Any) -> str:
-        return re.sub(r"[^a-z0-9]", "", str(name).strip().lower())
+        return re.sub(r"[^a-z0-9]", "", str(name or "").strip().lower())
 
     def _pick_index(
         normalized_index_map: dict[str, int],
@@ -1107,6 +1107,7 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
                     )
 
                 domain_idx = _pick_index(normalized_index_map, ("domain", "domainname"), 0, len(raw_headers))
+                keyword_idx = _pick_index(normalized_index_map, ("keyword",), 1, len(raw_headers))
                 category_idx = _pick_index(
                     normalized_index_map,
                     ("category", "niche", "nichecategory"),
@@ -1129,6 +1130,9 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
                         continue
 
                     raw_domain = _cell(row, domain_idx)
+                    raw_keyword = _cell(row, keyword_idx).lower()
+                    if not raw_domain and re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", raw_keyword or ""):
+                        raw_domain = f"{raw_keyword}.tech"
                     sanitized_domain = _sanitize_strict_tech_domain(raw_domain)
                     if not sanitized_domain:
                         continue
