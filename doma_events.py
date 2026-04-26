@@ -17,7 +17,7 @@ from telegram import InlineKeyboardMarkup
 from telegram.error import RetryAfter
 from telegram.ext import Application
 
-from vip_database import VipRecord, get_vip_database
+from vip_database import get_vip_database
 
 LOGGER = logging.getLogger(__name__)
 
@@ -1020,12 +1020,8 @@ async def send_telegram_notification(
             raise
 
 
-def build_candidate_domains(
-    vip_db: dict[str, VipRecord],
-    cfg: WatcherConfig,
-) -> tuple[list[str], dict[str, dict[str, str]]]:
+def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
     """Build candidate `.tech` domains and metadata from tech_targets.csv."""
-    del vip_db, cfg
     domains: set[str] = set()
     metadata_by_domain: dict[str, dict[str, str]] = {}
     csv_path = Path(__file__).with_name("tech_targets.csv")
@@ -1046,16 +1042,19 @@ def build_candidate_domains(
                 return [], {}
 
             for row in reader:
-                raw_domain = str((row or {}).get("Domain") or "").strip()
+                raw_domain = str(row.get("Domain") or "").strip()
                 sanitized_domain = _sanitize_strict_tech_domain(raw_domain)
                 if not sanitized_domain:
                     continue
-                category = str((row or {}).get("Category") or "").strip() or "General Tech"
-                logic = str((row or {}).get("Market Logic") or "").strip() or "High-Value Keyword"
+                category = str(row.get("Category") or "").strip() or "General Tech"
+                logic = str(row.get("Market Logic") or "").strip() or "High-Value Keyword"
                 domains.add(sanitized_domain)
                 metadata_by_domain[sanitized_domain] = {"category": category, "logic": logic}
-    except (OSError, csv.Error) as exc:
-        LOGGER.warning("Failed reading tech targets CSV %s: %s", csv_path, exc)
+    except OSError as exc:
+        LOGGER.warning("Unable to access tech targets CSV %s: %s", csv_path, exc)
+        return [], {}
+    except csv.Error as exc:
+        LOGGER.warning("Malformed tech targets CSV %s: %s", csv_path, exc)
         return [], {}
 
     return sorted(domains), metadata_by_domain
@@ -1156,7 +1155,7 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
             client = SpaceshipClient(session, cfg)
             vip_folder = Path(__file__).with_name("vip_data")
             active_vip_db = get_vip_database(vip_folder)
-            candidate_domains, domain_metadata = build_candidate_domains(active_vip_db, cfg)
+            candidate_domains, domain_metadata = build_candidate_domains()
             if not candidate_domains:
                 summary = {
                     "domains_checked": 0,
