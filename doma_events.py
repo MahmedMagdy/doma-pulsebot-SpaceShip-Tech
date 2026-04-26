@@ -1044,97 +1044,112 @@ async def send_telegram_notification(
 
 
 def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
-    """Build candidate `.tech` domains and metadata from tech_targets.csv."""
+    """Build candidate `.tech` domains and metadata from all CSVs in vip_data/."""
     domains: set[str] = set()
     metadata_by_domain: dict[str, dict[str, str]] = {}
-    csv_path = Path(__file__).with_name("tech_targets.csv")
-    if not csv_path.exists():
-        LOGGER.warning("Tech targets CSV not found: %s", csv_path)
+    vip_data_dir = Path(__file__).with_name("vip_data")
+    if not vip_data_dir.is_dir():
+        LOGGER.warning("vip_data directory not found: %s", vip_data_dir)
         return [], {}
 
-    try:
-        with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.reader(handle, delimiter=",")
-            raw_headers = next(reader, [])
-            if not raw_headers:
-                LOGGER.warning("Tech targets CSV is empty: %s", csv_path)
-                return [], {}
+    def _normalize_header(name: Any) -> str:
+        return re.sub(r"[^a-z0-9]", "", str(name or "").strip().lower())
 
-            def _normalize_header(header: Any) -> str:
-                # Intentionally strips all non-alphanumeric chars to tolerate BOM artifacts and header style variance.
-                return re.sub(r"[^a-z0-9]", "", str(header or "").strip().lower())
+    def _pick_index(
+        normalized_index_map: dict[str, int],
+        candidates: tuple[str, ...],
+        positional_fallback: int,
+        header_count: int,
+    ) -> Optional[int]:
+        for candidate in candidates:
+            idx = normalized_index_map.get(candidate)
+            if idx is not None:
+                return idx
+        if positional_fallback < header_count:
+            return positional_fallback
+        return None
 
-            def _pick_index(
-                normalized_index_map: dict[str, int],
-                candidates: tuple[str, ...],
-                positional_fallback: int,
-            ) -> Optional[int]:
-                for candidate in candidates:
-                    idx = normalized_index_map.get(candidate)
-                    if idx is not None:
-                        return idx
-                if positional_fallback < len(raw_headers):
-                    return positional_fallback
-                return None
+    def _cell(row_values: list[Any], index: Optional[int]) -> str:
+        if index is None or index >= len(row_values):
+            return ""
+        return str(row_values[index] or "").strip()
 
-            normalized_index_map: dict[str, int] = {}
-            duplicate_headers: set[str] = set()
-            for idx, header in enumerate(raw_headers):
-                normalized_name = _normalize_header(header)
-                if not normalized_name:
+    csv_files = sorted(vip_data_dir.glob("*.csv"))
+    if not csv_files:
+        LOGGER.warning("No CSV files found in vip_data directory: %s", vip_data_dir)
+        return [], {}
+
+    for csv_path in csv_files:
+        try:
+            with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                reader = csv.reader(handle, delimiter=",")
+                raw_headers = next(reader, [])
+                if not raw_headers:
+                    LOGGER.warning("VIP CSV is empty: %s", csv_path)
                     continue
-                if normalized_name in normalized_index_map:
-                    duplicate_headers.add(normalized_name)
-                    continue
-                normalized_index_map[normalized_name] = idx
 
-            if duplicate_headers:
-                LOGGER.warning(
-                    "tech_targets.csv has duplicate headers after normalization: %s",
-                    sorted(duplicate_headers),
+                normalized_index_map: dict[str, int] = {}
+                duplicate_headers: set[str] = set()
+                for idx, header in enumerate(raw_headers):
+                    normalized_name = _normalize_header(header)
+                    if not normalized_name:
+                        continue
+                    if normalized_name in normalized_index_map:
+                        duplicate_headers.add(normalized_name)
+                        continue
+                    normalized_index_map[normalized_name] = idx
+
+                if duplicate_headers:
+                    LOGGER.warning(
+                        "VIP CSV %s has duplicate headers after normalization: %s",
+                        csv_path.name,
+                        sorted(duplicate_headers),
+                    )
+
+                domain_idx = _pick_index(normalized_index_map, ("domain", "domainname"), 0, len(raw_headers))
+                keyword_idx = _pick_index(normalized_index_map, ("keyword",), 1, len(raw_headers))
+                category_idx = _pick_index(
+                    normalized_index_map,
+                    ("category", "niche", "nichecategory"),
+                    2,
+                    len(raw_headers),
+                )
+                market_logic_idx = _pick_index(
+                    normalized_index_map,
+                    ("marketlogic", "logic", "market"),
+                    3,
+                    len(raw_headers),
                 )
 
-            # "domain_name", "domain name", and "domain-name" all normalize to "domainname".
-            domain_idx = _pick_index(normalized_index_map, ("domain", "domainname"), 0)
-            keyword_idx = _pick_index(normalized_index_map, ("keyword",), 1)
-            category_idx = _pick_index(normalized_index_map, ("category", "niche", "nichecategory"), 2)
-            market_logic_idx = _pick_index(normalized_index_map, ("marketlogic", "logic", "market"), 3)
-
-            if domain_idx is None:
-                LOGGER.warning("tech_targets.csv missing domain column/header: %s", raw_headers)
-                return [], {}
-
-            def _cell(row_values: list[Any], index: Optional[int]) -> str:
-                if index is None or index >= len(row_values):
-                    return ""
-                return str(row_values[index] or "").strip()
-
-            for row in reader:
-                if not row or not any(str(value or "").strip() for value in row):
+                if domain_idx is None:
+                    LOGGER.warning("VIP CSV missing domain column/header: %s (%s)", csv_path, raw_headers)
                     continue
 
-                raw_domain = _cell(row, domain_idx)
-                raw_keyword = _cell(row, keyword_idx).lower()
-                if not raw_domain and re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", raw_keyword or ""):
-                    raw_domain = f"{raw_keyword}.tech"
+                for row in reader:
+                    if not row or not any(str(value or "").strip() for value in row):
+                        continue
 
-                sanitized_domain = _sanitize_strict_tech_domain(raw_domain)
-                if not sanitized_domain:
-                    continue
+                    raw_domain = _cell(row, domain_idx)
+                    raw_keyword = _cell(row, keyword_idx).lower()
+                    if not raw_domain and re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", raw_keyword or ""):
+                        raw_domain = f"{raw_keyword}.tech"
+                    sanitized_domain = _sanitize_strict_tech_domain(raw_domain)
+                    if not sanitized_domain:
+                        continue
 
-                category = _cell(row, category_idx) or DEFAULT_TECH_CATEGORY
-                market_logic = _cell(row, market_logic_idx) or DEFAULT_MARKET_LOGIC
-                domains.add(sanitized_domain)
-                metadata_by_domain[sanitized_domain] = {
-                    "category": category,
-                    "market_logic": market_logic,
-                }
-    except OSError as exc:
-        LOGGER.warning("Unable to access tech targets CSV %s: %s", csv_path, exc)
-        return [], {}
-    except csv.Error as exc:
-        LOGGER.warning("Malformed tech targets CSV %s: %s", csv_path, exc)
-        return [], {}
+                    category = _cell(row, category_idx) or DEFAULT_TECH_CATEGORY
+                    market_logic = _cell(row, market_logic_idx) or DEFAULT_MARKET_LOGIC
+                    domains.add(sanitized_domain)
+                    metadata_by_domain[sanitized_domain] = {
+                        "category": category,
+                        "market_logic": market_logic,
+                    }
+        except OSError as exc:
+            LOGGER.warning("Unable to access VIP CSV %s: %s", csv_path, exc)
+            continue
+        except csv.Error as exc:
+            LOGGER.warning("Malformed VIP CSV %s: %s", csv_path, exc)
+            continue
 
     return sorted(domains), metadata_by_domain
 
