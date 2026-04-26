@@ -65,13 +65,19 @@ STANDARD_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
 )
 
 # Spaceship-specific throttle / batch controls
-# ─ 2 s intra-batch delay as required; keep default 429-backoff seed here too
-SPACESHIP_INTRA_BATCH_DELAY_SECONDS = 2
-SPACESHIP_BULK_BATCH_SIZE = 20          # Spaceship /domains/available max batch size
+# Throttle math: target 95% of allowed request rate to stay safely below provider limits.
+SPACESHIP_REQUESTS_PER_MINUTE_LIMIT = 30
+SPACESHIP_TARGET_REQUESTS_PER_MINUTE = SPACESHIP_REQUESTS_PER_MINUTE_LIMIT * 0.95
+# 60 / (30 * 0.95) = 2.105263..., rounded to 2.105 seconds.
+SPACESHIP_INTRA_BATCH_DELAY_SECONDS = round(60 / SPACESHIP_TARGET_REQUESTS_PER_MINUTE, 3)
+SPACESHIP_BULK_BATCH_SIZE = 20  # Spaceship /domains/available max batch size
 SPACESHIP_API_SINGLE_RETRY_DELAY_SECONDS = 3
 SPACESHIP_API_MAX_ATTEMPTS = 4
 SPACESHIP_STUBBORN_RETRY_ATTEMPTS = 6
 SPACESHIP_STUBBORN_MAX_BACKOFF_SECONDS = 32
+TELEGRAM_GROUP_MESSAGES_PER_MINUTE_LIMIT = 20
+TELEGRAM_TARGET_MESSAGES_PER_MINUTE = TELEGRAM_GROUP_MESSAGES_PER_MINUTE_LIMIT * 0.95
+TELEGRAM_MIN_MESSAGE_INTERVAL_SECONDS = round(60 / TELEGRAM_TARGET_MESSAGES_PER_MINUTE, 3)  # 3.158s
 DEFAULT_STATUS_EMOJI = "🟡"
 PRICE_VERIFICATION_FAILED_TEXT = "Verification Failed (Check Manually!)"
 PROCESSED_CSV_LOCK = threading.Lock()
@@ -965,7 +971,7 @@ def format_available_alert(
     clean_link = html.escape(str(buy_link or "").strip(), quote=True)
     return (
         f"🟢 <b>Domain:</b> {clean_domain}\n"
-        f"📂 <b>Niche/Category:</b> {clean_category}\n"
+        f"📂 <b>Niche:</b> {clean_category}\n"
         f"💡 <b>Market Logic:</b> {clean_market_logic}\n"
         f"💰 <b>Price:</b> ${clean_price}\n"
         f"🛒 <b>Buy:</b> <a href=\"{clean_link}\">Open in Spaceship</a>"
@@ -1004,8 +1010,25 @@ async def send_telegram_notification(
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
 
+    async def _respect_telegram_group_rate_limit() -> None:
+        loop = asyncio.get_running_loop()
+        lock = app.bot_data.get("_telegram_send_lock")
+        if not isinstance(lock, asyncio.Lock):
+            raise RuntimeError("Telegram send lock is not initialized in app.bot_data")
+        async with lock:
+            next_allowed_send = float(app.bot_data.get("_telegram_next_allowed_send_monotonic", 0.0))
+            now = loop.time()
+            wait_seconds = next_allowed_send - now
+            if wait_seconds > 0:
+                await asyncio.sleep(wait_seconds)
+                now = loop.time()
+            app.bot_data["_telegram_next_allowed_send_monotonic"] = (
+                now + TELEGRAM_MIN_MESSAGE_INTERVAL_SECONDS
+            )
+
     while True:
         try:
+            await _respect_telegram_group_rate_limit()
             await app.bot.send_message(**payload)
             LOGGER.info(
                 "✅ VERIFIED: Telegram message sent for %s to topic=%s",
@@ -1032,18 +1055,42 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
     try:
         with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle, delimiter=",")
-            expected_columns = {"Domain", "Keyword", "Category", "Market Logic"}
-            if not reader.fieldnames or not expected_columns.issubset(set(reader.fieldnames)):
+            source_columns = reader.fieldnames or []
+            normalized_columns: dict[str, str] = {}
+            duplicate_normalized_columns: set[str] = set()
+            for name in source_columns:
+                normalized_name = str(name or "").strip().lower()
+                if not normalized_name:
+                    continue
+                if normalized_name in normalized_columns:
+                    duplicate_normalized_columns.add(normalized_name)
+                    continue
+                normalized_columns[normalized_name] = name
+            if duplicate_normalized_columns:
+                LOGGER.warning(
+                    "tech_targets.csv has duplicate column names after normalization: %s",
+                    sorted(duplicate_normalized_columns),
+                )
+                return [], {}
+            domain_column = normalized_columns.get("domain")
+            keyword_column = normalized_columns.get("keyword")
+            category_column = (
+                normalized_columns.get("niche")
+                or normalized_columns.get("category")
+                or normalized_columns.get("niche/category")
+            )
+            market_logic_column = normalized_columns.get("market logic")
+            if not domain_column or not category_column or not market_logic_column:
                 LOGGER.warning(
                     "tech_targets.csv is missing required columns. expected=%s found=%s",
-                    sorted(expected_columns),
-                    reader.fieldnames or [],
+                    ["Domain", "Niche (or Category or Niche/Category)", "Market Logic"],
+                    source_columns,
                 )
                 return [], {}
 
             for row in reader:
-                raw_domain = str(row.get("Domain") or "").strip()
-                raw_keyword = str(row.get("Keyword") or "").strip().lower()
+                raw_domain = str(row.get(domain_column) or "").strip()
+                raw_keyword = str(row.get(keyword_column) or "").strip().lower() if keyword_column else ""
                 if not raw_domain:
                     if re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", raw_keyword or ""):
                         raw_domain = f"{raw_keyword}.tech"
@@ -1052,8 +1099,8 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
                 sanitized_domain = _sanitize_strict_tech_domain(raw_domain)
                 if not sanitized_domain:
                     continue
-                category = str(row.get("Category") or "").strip() or DEFAULT_TECH_CATEGORY
-                logic = str(row.get("Market Logic") or "").strip() or DEFAULT_MARKET_LOGIC
+                category = str(row.get(category_column) or "").strip() or DEFAULT_TECH_CATEGORY
+                logic = str(row.get(market_logic_column) or "").strip() or DEFAULT_MARKET_LOGIC
                 domains.add(sanitized_domain)
                 metadata_by_domain[sanitized_domain] = {"category": category, "logic": logic}
     except OSError as exc:
