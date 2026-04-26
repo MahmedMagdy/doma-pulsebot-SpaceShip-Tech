@@ -1061,7 +1061,7 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
                 return [], {}
 
             def _normalize_header(header: Any) -> str:
-                # Intentionally strips punctuation/spacing to tolerate BOM/mojibake CSV headers.
+                # Intentionally strips punctuation/spacing to tolerate BOM artifacts and header style variance.
                 return re.sub(r"[^a-z0-9]", "", str(header or "").strip().lower())
 
             def _pick_index(

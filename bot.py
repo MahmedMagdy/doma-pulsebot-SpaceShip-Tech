@@ -8,8 +8,9 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 ENV_PATH = Path(__file__).resolve().with_name(".env")
-load_dotenv(dotenv_path=ENV_PATH)
-if not ENV_PATH.exists():
+if ENV_PATH.exists():
+    load_dotenv(dotenv_path=ENV_PATH)
+else:
     load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
