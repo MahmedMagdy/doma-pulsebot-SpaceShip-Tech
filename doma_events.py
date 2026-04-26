@@ -80,9 +80,6 @@ PREMIUM_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
     ("pricing", "registration", "premiumPrice"),
     ("pricing", "registration", "premiumPrice", "amount"),
     ("pricing", "registration", "premiumPrice", "value"),
-    # Rare APIs flatten premium value into generic fields; keep these as last-resort.
-    ("registerPrice",),
-    ("price",),
 )
 PREMIUM_ONLY_FLAG_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
     # Used only for premium-status confirmation (not general price extraction).
@@ -427,7 +424,7 @@ def _read_dict_path(node: dict[str, Any], path: tuple[str, ...]) -> Any:
     return current
 
 
-def _is_truthy_premium_flag(value: Any) -> bool:
+def _is_premium_flag_value(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
@@ -451,7 +448,7 @@ def _has_explicit_premium_marker(node: dict[str, Any]) -> bool:
     if not isinstance(node, dict):
         return False
     for path in PREMIUM_FLAG_PATHS:
-        if _is_truthy_premium_flag(_read_dict_path(node, path)):
+        if _is_premium_flag_value(_read_dict_path(node, path)):
             return True
     for path in PREMIUM_TIER_PATHS:
         tier_value = _read_dict_path(node, path)
@@ -536,12 +533,11 @@ def extract_spaceship_price(payload: Any, domain_name: str, is_premium: bool) ->
 
     if is_premium:
         explicit_premium_marker = _has_explicit_premium_marker(item)
-        for path in PREMIUM_PRICE_PATHS:
-            if (path in PREMIUM_GENERIC_FALLBACK_PRICE_PATHS) and (not explicit_premium_marker):
-                continue
-            parsed = _coerce_non_negative_price(_read_dict_path(item, path))
-            if parsed is not None:
-                return parsed
+        premium_price = _extract_price_from_paths(item, PREMIUM_PRICE_PATHS)
+        if premium_price is not None:
+            return premium_price
+        if explicit_premium_marker:
+            return _extract_price_from_paths(item, PREMIUM_GENERIC_FALLBACK_PRICE_PATHS)
         return None
     return _extract_price_from_paths(item, STANDARD_PRICE_PATHS)
 
