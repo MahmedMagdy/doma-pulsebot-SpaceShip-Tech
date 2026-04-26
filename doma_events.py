@@ -352,15 +352,44 @@ def _read_dict_path(node: dict[str, Any], path: tuple[str, ...]) -> Any:
 
 
 def _is_premium_domain_item(item: dict[str, Any]) -> bool:
-    for flag_key in ("isPremium", "premium"):
-        flag_value = item.get(flag_key)
-        if isinstance(flag_value, bool) and flag_value:
+    if not isinstance(item, dict):
+        return False
+
+    def _is_truthy_flag(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "1", "yes", "y", "premium"}
+        if isinstance(value, (int, float)):
+            return float(value) == 1.0
+        return False
+
+    premium_flag_paths: tuple[tuple[str, ...], ...] = (
+        ("isPremium",),
+        ("premium",),
+        ("pricing", "isPremium"),
+        ("pricing", "premium", "isPremium"),
+    )
+    for path in premium_flag_paths:
+        if _is_truthy_flag(_read_dict_path(item, path)):
             return True
-        if isinstance(flag_value, str) and flag_value.strip().lower() == "true":
+
+    premium_tier_paths: tuple[tuple[str, ...], ...] = (
+        ("tier",),
+        ("pricing", "tier"),
+        ("pricing", "premium", "tier"),
+        ("priceType",),
+        ("pricing", "priceType"),
+    )
+    for path in premium_tier_paths:
+        tier_value = _read_dict_path(item, path)
+        if isinstance(tier_value, str) and tier_value.strip().lower() == "premium":
             return True
-    tier_value = item.get("tier")
-    if isinstance(tier_value, str) and tier_value.strip().lower() == "premium":
+
+    # Final safety net: premium-specific registration price fields imply premium inventory.
+    if _extract_price_from_paths(item, PREMIUM_PRICE_PATHS) is not None:
         return True
+
     return False
 
 
@@ -984,14 +1013,22 @@ def format_available_alert(
 
 def format_verification_failed_alert(
     sanitized_domain: str,
+    category: str,
+    market_logic: str,
     buy_link: str,
+    is_premium: bool,
 ) -> str:
     clean_domain = html.escape(str(sanitized_domain or "").strip().lower())
+    clean_category = html.escape(str(category or "").strip()) or DEFAULT_TECH_CATEGORY
+    clean_market_logic = html.escape(str(market_logic or "").strip()) or DEFAULT_MARKET_LOGIC
     clean_link = html.escape(str(buy_link or "").strip(), quote=True)
+    premium_badge = " 💎 <b>[PREMIUM]</b>" if is_premium else ""
     return (
-        f"🟡 <b>Domain:</b> {clean_domain} | "
-        f"💰 <b>Price:</b> ⚠️ {PRICE_VERIFICATION_FAILED_TEXT} | "
-        f"🛒 <b>Buy:</b> <a href=\"{clean_link}\">Spaceship Search URL</a>"
+        f"🟡 <b>Domain:</b> {clean_domain}{premium_badge}\n"
+        f"📂 <b>Niche:</b> {clean_category}\n"
+        f"💡 <b>Market Logic:</b> {clean_market_logic}\n"
+        f"💰 <b>Price:</b> ⚠️ {PRICE_VERIFICATION_FAILED_TEXT}\n"
+        f"🛒 <b>Buy:</b> <a href=\"{clean_link}\">Open in Spaceship</a>"
     )
 
 
@@ -1326,7 +1363,10 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                             domain_name=opportunity.domain,
                             text=format_verification_failed_alert(
                                 sanitized_domain=sanitized_domain,
+                                category=category,
+                                market_logic=market_logic,
                                 buy_link=buy_link,
+                                is_premium=opportunity.is_premium,
                             ),
                             parse_mode="HTML",
                             disable_web_page_preview=True,
