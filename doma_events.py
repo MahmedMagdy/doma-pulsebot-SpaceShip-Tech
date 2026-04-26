@@ -1029,7 +1029,7 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
 
     try:
         with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.DictReader(handle)
+            reader = csv.DictReader(handle, delimiter=",")
             expected_columns = {"Domain", "Keyword", "Category", "Market Logic"}
             if not reader.fieldnames or not expected_columns.issubset(set(reader.fieldnames)):
                 LOGGER.warning(
@@ -1042,8 +1042,11 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
             for row in reader:
                 raw_domain = str(row.get("Domain") or "").strip()
                 raw_keyword = str(row.get("Keyword") or "").strip().lower()
-                if not raw_domain and re.fullmatch(r"[a-z0-9-]+", raw_keyword or ""):
-                    raw_domain = f"{raw_keyword}.tech"
+                if not raw_domain:
+                    if re.fullmatch(r"[a-z0-9-]+", raw_keyword or ""):
+                        raw_domain = f"{raw_keyword}.tech"
+                    else:
+                        continue
                 sanitized_domain = _sanitize_strict_tech_domain(raw_domain)
                 if not sanitized_domain:
                     continue
@@ -1214,7 +1217,7 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                     if not sanitized_domain:
                         continue
                     metadata = domain_metadata.get(sanitized_domain, {})
-                    is_metadata_backed = bool(metadata)
+                    is_metadata_backed = sanitized_domain in domain_metadata
                     category = str(metadata.get("category") or "General Tech")
                     market_logic = str(metadata.get("logic") or "High-Value Keyword")
                     final_verified_price = opportunity.ask_price_usd
