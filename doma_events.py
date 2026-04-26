@@ -68,7 +68,8 @@ STANDARD_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
 # Throttle math: target 95% of allowed request rate to stay safely below provider limits.
 SPACESHIP_REQUESTS_PER_MINUTE_LIMIT = 30
 SPACESHIP_TARGET_REQUESTS_PER_MINUTE = SPACESHIP_REQUESTS_PER_MINUTE_LIMIT * 0.95
-SPACESHIP_INTRA_BATCH_DELAY_SECONDS = round(60 / SPACESHIP_TARGET_REQUESTS_PER_MINUTE, 3)  # ~2.105s
+# 60 / (30 * 0.95) = 2.105263..., rounded to 2.105 seconds.
+SPACESHIP_INTRA_BATCH_DELAY_SECONDS = round(60 / SPACESHIP_TARGET_REQUESTS_PER_MINUTE, 3)
 SPACESHIP_BULK_BATCH_SIZE = 20  # Spaceship /domains/available max batch size
 SPACESHIP_API_SINGLE_RETRY_DELAY_SECONDS = 3
 SPACESHIP_API_MAX_ATTEMPTS = 4
@@ -1013,8 +1014,7 @@ async def send_telegram_notification(
         loop = asyncio.get_running_loop()
         lock = app.bot_data.get("_telegram_send_lock")
         if not isinstance(lock, asyncio.Lock):
-            lock = asyncio.Lock()
-            app.bot_data["_telegram_send_lock"] = lock
+            raise RuntimeError("Telegram send lock is not initialized in app.bot_data")
         async with lock:
             next_allowed_send = float(app.bot_data.get("_telegram_next_allowed_send_monotonic", 0.0))
             now = loop.time()
@@ -1083,7 +1083,7 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
             if not domain_column or not category_column or not market_logic_column:
                 LOGGER.warning(
                     "tech_targets.csv is missing required columns. expected=%s found=%s",
-                    ["Domain", "Niche/Category", "Market Logic"],
+                    ["Domain", "Niche (or Category or Niche/Category)", "Market Logic"],
                     source_columns,
                 )
                 return [], {}
@@ -1201,10 +1201,6 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
         "latest_scan_summary",
         {"domains_checked": 0, "vip_matches": 0, "general_finds": 0},
     )
-    if not isinstance(app.bot_data.get("_telegram_send_lock"), asyncio.Lock):
-        app.bot_data["_telegram_send_lock"] = asyncio.Lock()
-    if not isinstance(app.bot_data.get("_telegram_next_allowed_send_monotonic"), (int, float)):
-        app.bot_data["_telegram_next_allowed_send_monotonic"] = 0.0
 
     store = AlertStore(cfg.db_path)
     try:

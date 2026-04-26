@@ -99,6 +99,8 @@ def main() -> None:
         nonlocal watcher_task
         application.bot_data.setdefault("watcher_paused", False)
         application.bot_data.setdefault("watcher_resume_event", asyncio.Event())
+        application.bot_data.setdefault("_telegram_send_lock", asyncio.Lock())
+        application.bot_data.setdefault("_telegram_next_allowed_send_monotonic", 0.0)
 
         def _start_watcher() -> asyncio.Task:
             task = asyncio.create_task(watch_events(application))
