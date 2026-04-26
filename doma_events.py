@@ -98,6 +98,7 @@ class DomainOpportunity:
     listing_url: str
     currency: str = "USD"
     availability_status: str = "Available"
+    is_premium: bool = False
 
     @property
     def tld(self) -> str:
@@ -395,19 +396,18 @@ def _extract_price_from_paths(item: dict[str, Any], paths: tuple[tuple[str, ...]
 
 
 # REPLACE HERE: Deterministic multi-layer Spaceship price extractor
-def extract_spaceship_price(payload: Any, domain_name: str) -> Optional[float]:
+def extract_spaceship_price(payload: Any, domain_name: str, is_premium: bool) -> Optional[float]:
     """
     Deterministic extractor:
     1) match exact domain object,
-    2) resolve premium status,
-    3) read only status-specific price paths,
+    2) read only status-specific price paths,
     4) cast to float or return None.
     """
     item = _find_domain_object_for_query(payload, domain_name)
     if item is None:
         return None
 
-    if _is_premium_domain_item(item):
+    if is_premium:
         return _extract_price_from_paths(item, PREMIUM_PRICE_PATHS)
     return _extract_price_from_paths(item, STANDARD_PRICE_PATHS)
 
@@ -746,7 +746,8 @@ def _parse_domain_item(item: dict, fallback_domain: str) -> Optional["DomainOppo
         )
         return None
 
-    verified_price = extract_spaceship_price(item, normalized_domain)
+    domain_is_premium = _is_premium_domain_item(item)
+    verified_price = extract_spaceship_price(item, normalized_domain, domain_is_premium)
     ask_price = verified_price
     if verified_price is None:
         domain_price = PRICE_VERIFICATION_FAILED_TEXT
@@ -766,6 +767,7 @@ def _parse_domain_item(item: dict, fallback_domain: str) -> Optional["DomainOppo
         listing_url=buy_link,
         currency="USD",
         availability_status=status_text,
+        is_premium=domain_is_premium,
     )
 
 
@@ -963,14 +965,16 @@ def format_available_alert(
     category: str,
     market_logic: str,
     buy_link: str,
+    is_premium: bool,
 ) -> str:
     clean_domain = html.escape(str(sanitized_domain or "").strip().lower())
     clean_price = f"{final_verified_price:.2f}"
     clean_category = html.escape(str(category or "").strip()) or DEFAULT_TECH_CATEGORY
     clean_market_logic = html.escape(str(market_logic or "").strip()) or DEFAULT_MARKET_LOGIC
     clean_link = html.escape(str(buy_link or "").strip(), quote=True)
+    premium_badge = " 💎 <b>[PREMIUM]</b>" if is_premium else ""
     return (
-        f"🟢 <b>Domain:</b> {clean_domain}\n"
+        f"🟢 <b>Domain:</b> {clean_domain}{premium_badge}\n"
         f"📂 <b>Niche:</b> {clean_category}\n"
         f"💡 <b>Market Logic:</b> {clean_market_logic}\n"
         f"💰 <b>Price:</b> ${clean_price}\n"
@@ -1334,7 +1338,7 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                             general_match_count += 1
                         LOGGER.info("Telegram send success domain=%s case=verification_failed", opportunity.domain)
                         continue
-                    if final_verified_price > MAX_SUITABLE_PRICE_USD:
+                    if (not opportunity.is_premium) and final_verified_price > MAX_SUITABLE_PRICE_USD:
                         LOGGER.info(
                             "Dropping domain=%s reason=over_budget price=%.2f",
                             opportunity.domain,
@@ -1351,6 +1355,7 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                             category=category,
                             market_logic=market_logic,
                             buy_link=buy_link,
+                            is_premium=opportunity.is_premium,
                         ),
                         parse_mode="HTML",
                         disable_web_page_preview=True,
