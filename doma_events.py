@@ -401,7 +401,7 @@ def extract_spaceship_price(payload: Any, domain_name: str, is_premium: bool) ->
     Deterministic extractor:
     1) match exact domain object,
     2) read only status-specific price paths,
-    4) cast to float or return None.
+    3) cast to float or return None.
     """
     item = _find_domain_object_for_query(payload, domain_name)
     if item is None:
