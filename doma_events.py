@@ -43,16 +43,101 @@ PROCESSED_STATUS_ALLOWED = {
 }
 MAX_SUITABLE_PRICE_USD = 50.00
 PREMIUM_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
-    ("pricing", "premium", "register"),
-    ("pricing", "premium", "registerPrice"),
-    ("pricing", "premium", "price"),
-    ("pricing", "premium", "amount"),
     ("premiumPrice",),
-    ("premium", "register"),
-    ("premium", "registerPrice"),
+    ("premiumPrice", "amount"),
+    ("premiumPrice", "value"),
+    ("premiumPrice", "register"),
+    ("premiumPrice", "registerPrice"),
+    ("premium",),
     ("premium", "price"),
     ("premium", "amount"),
+    ("premium", "value"),
+    ("premium", "register"),
+    ("premium", "registerPrice"),
+    ("premium", "registration"),
+    ("premium", "registrationPrice"),
+    ("pricing", "premium", "register"),
+    ("pricing", "premium", "registerPrice"),
+    ("pricing", "premium", "registration"),
+    ("pricing", "premium", "registrationPrice"),
+    ("pricing", "premium", "price"),
+    ("pricing", "premium", "amount"),
+    ("pricing", "premium", "value"),
+    ("pricing", "premium", "amount", "value"),
+    ("pricing", "premiumPrice"),
+    ("pricing", "premiumPrice", "amount"),
+    ("pricing", "premiumPrice", "value"),
+    ("pricing", "premiumPrice", "register"),
+    ("pricing", "premiumPrice", "registerPrice"),
+    ("pricing", "registerPremium"),
+    ("pricing", "registerPremiumPrice"),
+    ("pricing", "price", "premium"),
+    ("pricing", "price", "premium", "amount"),
+    ("pricing", "price", "premium", "value"),
+    ("pricing", "registration", "premium"),
+    ("pricing", "registration", "premium", "amount"),
+    ("pricing", "registration", "premium", "value"),
+    ("pricing", "registration", "premiumPrice"),
+    ("pricing", "registration", "premiumPrice", "amount"),
+    ("pricing", "registration", "premiumPrice", "value"),
 )
+PREMIUM_ONLY_FLAG_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
+    # Used only for premium-status confirmation (not general price extraction).
+    ("premiumPrice",),
+    ("premiumPrice", "amount"),
+    ("premium", "registerPrice"),
+    ("pricing", "premium", "registerPrice"),
+    ("pricing", "registerPremiumPrice"),
+)
+PREMIUM_GENERIC_FALLBACK_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
+    ("registerPrice",),
+    ("price",),
+)
+PREMIUM_FLAG_PATHS: tuple[tuple[str, ...], ...] = (
+    ("isPremium",),
+    ("premium",),
+    ("is_premium",),
+    ("premiumDomain",),
+    ("isPremiumDomain",),
+    ("pricing", "isPremium"),
+    ("pricing", "premium"),
+    ("pricing", "is_premium"),
+    ("pricing", "premiumDomain"),
+    ("pricing", "isPremiumDomain"),
+    ("pricing", "premium", "isPremium"),
+    ("pricing", "premium", "enabled"),
+    ("pricing", "premium", "active"),
+    ("pricing", "premium", "isActive"),
+    ("pricing", "price", "isPremium"),
+    ("pricing", "registration", "isPremium"),
+)
+PREMIUM_TIER_PATHS: tuple[tuple[str, ...], ...] = (
+    ("tier",),
+    ("type",),
+    ("class",),
+    ("pricing", "tier"),
+    ("pricing", "type"),
+    ("pricing", "class"),
+    ("pricing", "premium", "tier"),
+    ("pricing", "premium", "type"),
+    ("priceType",),
+    ("pricing", "priceType"),
+    ("pricing", "registration", "tier"),
+    ("pricing", "registration", "type"),
+)
+PREMIUM_FLAG_STRING_VALUES = frozenset(
+    {
+        "true",
+        "1",
+        "yes",
+        "y",
+        "premium",
+        "is_premium",
+        "premium_domain",
+        "premiumdomain",
+    }
+)
+PREMIUM_TIER_STRING_VALUES = frozenset({"premium", "premium_domain", "premiumdomain"})
 STANDARD_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
     ("pricing", "standard", "register"),
     ("pricing", "standard", "registerPrice"),
@@ -80,6 +165,7 @@ TELEGRAM_TARGET_MESSAGES_PER_MINUTE = TELEGRAM_GROUP_MESSAGES_PER_MINUTE_LIMIT *
 TELEGRAM_MIN_MESSAGE_INTERVAL_SECONDS = round(60 / TELEGRAM_TARGET_MESSAGES_PER_MINUTE, 3)  # 3.158s
 DEFAULT_STATUS_EMOJI = "🟡"
 PRICE_VERIFICATION_FAILED_TEXT = "Verification Failed (Check Manually!)"
+PREMIUM_PRICE_VERIFICATION_FAILED_TEXT = "Premium Verified, Price Extraction Failed (Check Manually!)"
 PROCESSED_CSV_LOCK = threading.Lock()
 
 
@@ -351,43 +437,51 @@ def _read_dict_path(node: dict[str, Any], path: tuple[str, ...]) -> Any:
     return current
 
 
+def _is_premium_flag_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in PREMIUM_FLAG_STRING_VALUES
+    if isinstance(value, (int, float)):
+        return float(value) == 1.0
+    return False
+
+
+def _has_explicit_premium_marker(node: dict[str, Any]) -> bool:
+    """Return True when payload contains explicit premium flags/tier markers."""
+    if not isinstance(node, dict):
+        return False
+    for path in PREMIUM_FLAG_PATHS:
+        if _is_premium_flag_value(_read_dict_path(node, path)):
+            return True
+    for path in PREMIUM_TIER_PATHS:
+        tier_value = _read_dict_path(node, path)
+        if isinstance(tier_value, str) and tier_value.strip().lower() in PREMIUM_TIER_STRING_VALUES:
+            return True
+    return False
+
+
 def _is_premium_domain_item(item: dict[str, Any]) -> bool:
     if not isinstance(item, dict):
         return False
 
-    def _is_truthy_flag(value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.strip().lower() in {"true", "1", "yes", "y", "premium"}
-        if isinstance(value, (int, float)):
-            return float(value) == 1.0
-        return False
+    if _has_explicit_premium_marker(item):
+        return True
 
-    premium_flag_paths: tuple[tuple[str, ...], ...] = (
-        ("isPremium",),
-        ("premium",),
-        ("pricing", "isPremium"),
-        ("pricing", "premium", "isPremium"),
-    )
-    for path in premium_flag_paths:
-        if _is_truthy_flag(_read_dict_path(item, path)):
-            return True
+    def _dict_contains_price(value: Any) -> bool:
+        """Return True when any direct nested value parses as a non-negative price."""
+        if not isinstance(value, dict):
+            return False
+        return any(_coerce_non_negative_price(nested_value) is not None for nested_value in value.values())
 
-    premium_tier_paths: tuple[tuple[str, ...], ...] = (
-        ("tier",),
-        ("pricing", "tier"),
-        ("pricing", "premium", "tier"),
-        ("priceType",),
-        ("pricing", "priceType"),
-    )
-    for path in premium_tier_paths:
-        tier_value = _read_dict_path(item, path)
-        if isinstance(tier_value, str) and tier_value.strip().lower() == "premium":
-            return True
+    premium_bucket = _read_dict_path(item, ("pricing", "premium"))
+    if _dict_contains_price(premium_bucket):
+        return True
+    if _dict_contains_price(item.get("premium")):
+        return True
 
-    # Final safety net: premium-specific registration price fields imply premium inventory.
-    if _extract_price_from_paths(item, PREMIUM_PRICE_PATHS) is not None:
+    # Final safety net: premium-only price fields imply premium inventory.
+    if _extract_price_from_paths(item, PREMIUM_ONLY_FLAG_PRICE_PATHS) is not None:
         return True
 
     return False
@@ -437,7 +531,13 @@ def extract_spaceship_price(payload: Any, domain_name: str, is_premium: bool) ->
         return None
 
     if is_premium:
-        return _extract_price_from_paths(item, PREMIUM_PRICE_PATHS)
+        explicit_premium_marker = _has_explicit_premium_marker(item)
+        premium_price = _extract_price_from_paths(item, PREMIUM_PRICE_PATHS)
+        if premium_price is not None:
+            return premium_price
+        if explicit_premium_marker:
+            return _extract_price_from_paths(item, PREMIUM_GENERIC_FALLBACK_PRICE_PATHS)
+        return None
     return _extract_price_from_paths(item, STANDARD_PRICE_PATHS)
 
 
@@ -1023,11 +1123,16 @@ def format_verification_failed_alert(
     clean_market_logic = html.escape(str(market_logic or "").strip()) or DEFAULT_MARKET_LOGIC
     clean_link = html.escape(str(buy_link or "").strip(), quote=True)
     premium_badge = " 💎 <b>[PREMIUM]</b>" if is_premium else ""
+    price_text = (
+        f"⚠️ {PREMIUM_PRICE_VERIFICATION_FAILED_TEXT}"
+        if is_premium
+        else f"⚠️ {PRICE_VERIFICATION_FAILED_TEXT}"
+    )
     return (
         f"🟡 <b>Domain:</b> {clean_domain}{premium_badge}\n"
         f"📂 <b>Niche:</b> {clean_category}\n"
         f"💡 <b>Market Logic:</b> {clean_market_logic}\n"
-        f"💰 <b>Price:</b> ⚠️ {PRICE_VERIFICATION_FAILED_TEXT}\n"
+        f"💰 <b>Price:</b> {price_text}\n"
         f"🛒 <b>Buy:</b> <a href=\"{clean_link}\">Open in Spaceship</a>"
     )
 
