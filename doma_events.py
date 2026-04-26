@@ -17,8 +17,6 @@ from telegram import InlineKeyboardMarkup
 from telegram.error import RetryAfter
 from telegram.ext import Application
 
-from vip_database import get_vip_database
-
 LOGGER = logging.getLogger(__name__)
 
 # ─── Tuning constants ────────────────────────────────────────────────────────
@@ -1043,6 +1041,9 @@ def build_candidate_domains() -> tuple[list[str], dict[str, dict[str, str]]]:
 
             for row in reader:
                 raw_domain = str(row.get("Domain") or "").strip()
+                raw_keyword = str(row.get("Keyword") or "").strip().lower()
+                if not raw_domain and raw_keyword:
+                    raw_domain = f"{raw_keyword}.tech"
                 sanitized_domain = _sanitize_strict_tech_domain(raw_domain)
                 if not sanitized_domain:
                     continue
@@ -1153,8 +1154,6 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             client = SpaceshipClient(session, cfg)
-            vip_folder = Path(__file__).with_name("vip_data")
-            active_vip_db = get_vip_database(vip_folder)
             candidate_domains, domain_metadata = build_candidate_domains()
             if not candidate_domains:
                 summary = {
@@ -1215,6 +1214,7 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                     if not sanitized_domain:
                         continue
                     metadata = domain_metadata.get(sanitized_domain, {})
+                    has_metadata = sanitized_domain in domain_metadata
                     category = str(metadata.get("category") or "General Tech")
                     market_logic = str(metadata.get("logic") or "High-Value Keyword")
                     final_verified_price = opportunity.ask_price_usd
@@ -1231,7 +1231,7 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                             disable_web_page_preview=True,
                         )
                         store.mark_alerted(fixed_chat_id, opportunity.domain, opportunity.source)
-                        if opportunity.sld in active_vip_db:
+                        if has_metadata:
                             vip_match_count += 1
                         else:
                             general_match_count += 1
@@ -1259,7 +1259,7 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                         disable_web_page_preview=True,
                     )
                     store.mark_alerted(fixed_chat_id, opportunity.domain, opportunity.source)
-                    if opportunity.sld in active_vip_db:
+                    if has_metadata:
                         vip_match_count += 1
                     else:
                         general_match_count += 1
