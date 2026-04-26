@@ -23,16 +23,16 @@ LOGGER = logging.getLogger(__name__)
 
 # ─── Tuning constants ────────────────────────────────────────────────────────
 MAIN_CHAT_ID = -1003736596502
-# Strict .me mode: all available alerts are routed to the fixed topic below.
-TELEGRAM_TOPIC_ID = 20253
-PRIORITY_TLDS = frozenset({".me"})
+# Strict .tech mode: all available alerts are routed to the fixed topic below.
+TELEGRAM_TOPIC_ID = 20991
+PRIORITY_TLDS = frozenset({".tech"})
 
 MIN_POLL_SECONDS = 1
 MIN_QUOTA_COOLDOWN_SECONDS = 30
 MIN_CIRCUIT_BREAKER_SECONDS = 30
 DEFAULT_FALLBACK_ASK_PRICE_USD = 10.0
 WATCHER_ERROR_RETRY_SECONDS = 5
-TARGET_TLDS = {".me"}
+TARGET_TLDS = {".tech"}
 PROCESSED_STATUS_AVAILABLE = "Available"
 PROCESSED_STATUS_TAKEN = "Taken"
 PROCESSED_STATUS_ERROR = "Error"
@@ -305,14 +305,14 @@ def _coerce_non_negative_price(value: Any) -> Optional[float]:
     return round(parsed, 2)
 
 
-# REPLACE HERE: Strict .me domain validator module
-def _sanitize_strict_me_domain(raw_domain: Any) -> str:
+# REPLACE HERE: Strict .tech domain validator module
+def _sanitize_strict_tech_domain(raw_domain: Any) -> str:
     """
-    Strictly validate and normalize a domain with exactly one .me extension.
+    Strictly validate and normalize a domain with exactly one .tech extension.
 
     Rules:
     - no whitespace
-    - exactly one trailing .me extension
+    - exactly one trailing .tech extension
     - keyword contains only [a-z0-9-]
     - keyword cannot start/end with '-'
     """
@@ -321,18 +321,18 @@ def _sanitize_strict_me_domain(raw_domain: Any) -> str:
         return ""
     if any(ch.isspace() for ch in clean_domain):
         return ""
-    if not clean_domain.endswith(".me"):
+    if not clean_domain.endswith(".tech"):
         return ""
-    if clean_domain.count(".me") != 1:
+    if clean_domain.count(".tech") != 1:
         return ""
-    keyword = clean_domain[:-3]
+    keyword = clean_domain[:-5]
     if not keyword or "." in keyword:
         return ""
     if not re.fullmatch(r"[a-z0-9-]+", keyword):
         return ""
     if keyword.startswith("-") or keyword.endswith("-"):
         return ""
-    return f"{keyword}.me"
+    return f"{keyword}.tech"
 
 
 def _read_dict_path(node: dict[str, Any], path: tuple[str, ...]) -> Any:
@@ -358,7 +358,7 @@ def _is_premium_domain_item(item: dict[str, Any]) -> bool:
 
 
 def _find_domain_object_for_query(payload: Any, domain_name: str) -> Optional[dict[str, Any]]:
-    normalized_query = _sanitize_strict_me_domain(domain_name) or str(domain_name or "").strip().lower()
+    normalized_query = _sanitize_strict_tech_domain(domain_name) or str(domain_name or "").strip().lower()
     if not normalized_query:
         return None
 
@@ -373,7 +373,7 @@ def _find_domain_object_for_query(payload: Any, domain_name: str) -> Optional[di
             candidate_items = [payload]
 
     for item in candidate_items:
-        item_domain = _sanitize_strict_me_domain(_parse_item_domain(item)) or _parse_item_domain(item)
+        item_domain = _sanitize_strict_tech_domain(_parse_item_domain(item)) or _parse_item_domain(item)
         if item_domain and item_domain.lower() == normalized_query:
             return item
     return None
@@ -724,11 +724,11 @@ def _parse_domain_item(item: dict, fallback_domain: str) -> Optional["DomainOppo
     Convert a single Spaceship domain-check result dict into a DomainOpportunity.
 
     Domain and pricing are accepted when:
-      - Domain is a strict .me format with exactly one ".me" extension.
+      - Domain is a strict .tech format with exactly one ".tech" extension.
       - Price is extracted deterministically via extract_spaceship_price.
     """
-    fallback_sanitized = _sanitize_strict_me_domain(fallback_domain)
-    item_sanitized = _sanitize_strict_me_domain(_parse_item_domain(item))
+    fallback_sanitized = _sanitize_strict_tech_domain(fallback_domain)
+    item_sanitized = _sanitize_strict_tech_domain(_parse_item_domain(item))
     normalized_domain = item_sanitized or fallback_sanitized
     if not normalized_domain:
         return None
@@ -880,8 +880,8 @@ def log_to_processed_csv(base_keyword: str, full_domain: str, status: str) -> No
 
 def _base_keyword_from_domain(full_domain: str) -> str:
     clean_domain = str(full_domain or "").strip().lower()
-    if clean_domain.endswith(".me"):
-        return clean_domain.removesuffix(".me")
+    if clean_domain.endswith(".tech"):
+        return clean_domain.removesuffix(".tech")
     return clean_domain.split(".", 1)[0] if "." in clean_domain else clean_domain
 
 
@@ -899,7 +899,7 @@ async def check_domains_with_single_retry(
     """
     normalized_domains = []
     for raw_domain in domains:
-        sanitized_domain = _sanitize_strict_me_domain(raw_domain)
+        sanitized_domain = _sanitize_strict_tech_domain(raw_domain)
         if not sanitized_domain:
             LOGGER.warning("Skipping invalid domain before API call: %s", raw_domain)
             continue
@@ -954,15 +954,21 @@ async def check_domains_with_single_retry(
 def format_available_alert(
     sanitized_domain: str,
     final_verified_price: float,
+    category: str,
+    market_logic: str,
     buy_link: str,
 ) -> str:
     clean_domain = html.escape(str(sanitized_domain or "").strip().lower())
     clean_price = f"{final_verified_price:.2f}"
+    clean_category = html.escape(str(category or "").strip()) or "General Tech"
+    clean_market_logic = html.escape(str(market_logic or "").strip()) or "High-Value Keyword"
     clean_link = html.escape(str(buy_link or "").strip(), quote=True)
     return (
-        f"🟢 <b>Domain:</b> {clean_domain} | "
-        f"💰 <b>Price:</b> ${clean_price} | "
-        f"🛒 <b>Buy:</b> <a href=\"{clean_link}\">Spaceship Search URL</a>"
+        f"🟢 <b>Domain:</b> {clean_domain}\n"
+        f"📂 <b>Niche/Category:</b> {clean_category}\n"
+        f"💡 <b>Market Logic:</b> {clean_market_logic}\n"
+        f"💰 <b>Price:</b> ${clean_price}\n"
+        f"🛒 <b>Buy:</b> <a href=\"{clean_link}\">Open in Spaceship</a>"
     )
 
 
@@ -1014,22 +1020,45 @@ async def send_telegram_notification(
             raise
 
 
-def build_candidate_domains(vip_db: dict[str, VipRecord], cfg: WatcherConfig) -> list[str]:
-    """Build candidate domains from VIP roots and high-value keyword permutations across allowed TLDs."""
+def build_candidate_domains(
+    vip_db: dict[str, VipRecord],
+    cfg: WatcherConfig,
+) -> tuple[list[str], dict[str, dict[str, str]]]:
+    """Build candidate `.tech` domains and metadata from tech_targets.csv."""
+    del vip_db, cfg
     domains: set[str] = set()
-    effective_tlds = _effective_allowed_tlds()
-    for root in vip_db.keys():
-        normalized_root = root.strip().lower()
-        if not normalized_root:
-            continue
-        for tld in effective_tlds:
-            domains.add(f"{normalized_root}{tld}")
-    for keyword in cfg.high_value_keywords:
-        for tld in effective_tlds:
-            domains.add(f"{keyword}{tld}")
-            domains.add(f"get{keyword}{tld}")
-            domains.add(f"my{keyword}{tld}")
-    return sorted(domains)
+    metadata_by_domain: dict[str, dict[str, str]] = {}
+    csv_path = Path(__file__).with_name("tech_targets.csv")
+    if not csv_path.exists():
+        LOGGER.warning("Tech targets CSV not found: %s", csv_path)
+        return [], {}
+
+    try:
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            expected_columns = {"Domain", "Keyword", "Category", "Market Logic"}
+            if not reader.fieldnames or not expected_columns.issubset(set(reader.fieldnames)):
+                LOGGER.warning(
+                    "tech_targets.csv is missing required columns. expected=%s found=%s",
+                    sorted(expected_columns),
+                    reader.fieldnames or [],
+                )
+                return [], {}
+
+            for row in reader:
+                raw_domain = str((row or {}).get("Domain") or "").strip()
+                sanitized_domain = _sanitize_strict_tech_domain(raw_domain)
+                if not sanitized_domain:
+                    continue
+                category = str((row or {}).get("Category") or "").strip() or "General Tech"
+                logic = str((row or {}).get("Market Logic") or "").strip() or "High-Value Keyword"
+                domains.add(sanitized_domain)
+                metadata_by_domain[sanitized_domain] = {"category": category, "logic": logic}
+    except (OSError, csv.Error) as exc:
+        LOGGER.warning("Failed reading tech targets CSV %s: %s", csv_path, exc)
+        return [], {}
+
+    return sorted(domains), metadata_by_domain
 
 
 def select_circular_batch(items: list[str], cursor: int, batch_size: int) -> tuple[list[str], int]:
@@ -1127,7 +1156,7 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
             client = SpaceshipClient(session, cfg)
             vip_folder = Path(__file__).with_name("vip_data")
             active_vip_db = get_vip_database(vip_folder)
-            candidate_domains = build_candidate_domains(active_vip_db, cfg)
+            candidate_domains, domain_metadata = build_candidate_domains(active_vip_db, cfg)
             if not candidate_domains:
                 summary = {
                     "domains_checked": 0,
@@ -1151,8 +1180,8 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
             )
             app.bot_data["domain_cursor"] = next_cursor
             LOGGER.info("Fetching from Spaceship API: domains=%s", len(selected_domains))
-            me_count = sum(1 for d in selected_domains if d.endswith(".me"))
-            LOGGER.info("Priority coverage this cycle: .me=%s (total=%s)", me_count, len(selected_domains))
+            tech_count = sum(1 for d in selected_domains if d.endswith(".tech"))
+            LOGGER.info("Priority coverage this cycle: .tech=%s (total=%s)", tech_count, len(selected_domains))
             opportunities: list[DomainOpportunity] = []
             api_blocked_failed = 0
             for idx in range(0, len(selected_domains), SPACESHIP_BULK_BATCH_SIZE):
@@ -1183,9 +1212,12 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                         continue
                     if store.has_alerted(fixed_chat_id, opportunity.domain):
                         continue
-                    sanitized_domain = _sanitize_strict_me_domain(opportunity.domain)
+                    sanitized_domain = _sanitize_strict_tech_domain(opportunity.domain)
                     if not sanitized_domain:
                         continue
+                    metadata = domain_metadata.get(sanitized_domain, {})
+                    category = str(metadata.get("category") or "General Tech")
+                    market_logic = str(metadata.get("logic") or "High-Value Keyword")
                     final_verified_price = opportunity.ask_price_usd
                     if final_verified_price is None:
                         buy_link = f"https://www.spaceship.com/domain-search/?query={sanitized_domain}"
@@ -1220,6 +1252,8 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                         text=format_available_alert(
                             sanitized_domain=sanitized_domain,
                             final_verified_price=final_verified_price,
+                            category=category,
+                            market_logic=market_logic,
                             buy_link=buy_link,
                         ),
                         parse_mode="HTML",
