@@ -96,6 +96,38 @@ PREMIUM_GENERIC_FALLBACK_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
     ("registerPrice",),
     ("price",),
 )
+PREMIUM_FLAG_PATHS: tuple[tuple[str, ...], ...] = (
+    ("isPremium",),
+    ("premium",),
+    ("is_premium",),
+    ("premiumDomain",),
+    ("isPremiumDomain",),
+    ("pricing", "isPremium"),
+    ("pricing", "premium"),
+    ("pricing", "is_premium"),
+    ("pricing", "premiumDomain"),
+    ("pricing", "isPremiumDomain"),
+    ("pricing", "premium", "isPremium"),
+    ("pricing", "premium", "enabled"),
+    ("pricing", "premium", "active"),
+    ("pricing", "premium", "isActive"),
+    ("pricing", "price", "isPremium"),
+    ("pricing", "registration", "isPremium"),
+)
+PREMIUM_TIER_PATHS: tuple[tuple[str, ...], ...] = (
+    ("tier",),
+    ("type",),
+    ("class",),
+    ("pricing", "tier"),
+    ("pricing", "type"),
+    ("pricing", "class"),
+    ("pricing", "premium", "tier"),
+    ("pricing", "premium", "type"),
+    ("priceType",),
+    ("pricing", "priceType"),
+    ("pricing", "registration", "tier"),
+    ("pricing", "registration", "type"),
+)
 STANDARD_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
     ("pricing", "standard", "register"),
     ("pricing", "standard", "registerPrice"),
@@ -123,6 +155,7 @@ TELEGRAM_TARGET_MESSAGES_PER_MINUTE = TELEGRAM_GROUP_MESSAGES_PER_MINUTE_LIMIT *
 TELEGRAM_MIN_MESSAGE_INTERVAL_SECONDS = round(60 / TELEGRAM_TARGET_MESSAGES_PER_MINUTE, 3)  # 3.158s
 DEFAULT_STATUS_EMOJI = "🟡"
 PRICE_VERIFICATION_FAILED_TEXT = "Verification Failed (Check Manually!)"
+PREMIUM_PRICE_VERIFICATION_FAILED_TEXT = "Premium Verified, Price Extraction Failed (Check Manually!)"
 PROCESSED_CSV_LOCK = threading.Lock()
 
 
@@ -394,74 +427,45 @@ def _read_dict_path(node: dict[str, Any], path: tuple[str, ...]) -> Any:
     return current
 
 
+def _is_truthy_premium_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {
+            "true",
+            "1",
+            "yes",
+            "y",
+            "premium",
+            "is_premium",
+            "premium_domain",
+            "premiumdomain",
+        }
+    if isinstance(value, (int, float)):
+        return float(value) == 1.0
+    return False
+
+
+def _has_explicit_premium_marker(node: dict[str, Any]) -> bool:
+    """Return True when payload contains explicit premium flags/tier markers."""
+    if not isinstance(node, dict):
+        return False
+    for path in PREMIUM_FLAG_PATHS:
+        if _is_truthy_premium_flag(_read_dict_path(node, path)):
+            return True
+    for path in PREMIUM_TIER_PATHS:
+        tier_value = _read_dict_path(node, path)
+        if isinstance(tier_value, str) and tier_value.strip().lower() in {
+            "premium",
+            "premium_domain",
+            "premiumdomain",
+        }:
+            return True
+    return False
+
+
 def _is_premium_domain_item(item: dict[str, Any]) -> bool:
     if not isinstance(item, dict):
-        return False
-
-    def _has_explicit_premium_marker(node: dict[str, Any]) -> bool:
-        """Return True when payload contains explicit premium flags/tier markers."""
-        premium_flag_paths: tuple[tuple[str, ...], ...] = (
-            ("isPremium",),
-            ("premium",),
-            ("is_premium",),
-            ("premiumDomain",),
-            ("isPremiumDomain",),
-            ("pricing", "isPremium"),
-            ("pricing", "premium"),
-            ("pricing", "is_premium"),
-            ("pricing", "premiumDomain"),
-            ("pricing", "isPremiumDomain"),
-            ("pricing", "premium", "isPremium"),
-            ("pricing", "premium", "enabled"),
-            ("pricing", "premium", "active"),
-            ("pricing", "premium", "isActive"),
-            ("pricing", "price", "isPremium"),
-            ("pricing", "registration", "isPremium"),
-        )
-        for path in premium_flag_paths:
-            if _is_truthy_flag(_read_dict_path(node, path)):
-                return True
-
-        premium_tier_paths: tuple[tuple[str, ...], ...] = (
-            ("tier",),
-            ("type",),
-            ("class",),
-            ("pricing", "tier"),
-            ("pricing", "type"),
-            ("pricing", "class"),
-            ("pricing", "premium", "tier"),
-            ("pricing", "premium", "type"),
-            ("priceType",),
-            ("pricing", "priceType"),
-            ("pricing", "registration", "tier"),
-            ("pricing", "registration", "type"),
-        )
-        for path in premium_tier_paths:
-            tier_value = _read_dict_path(node, path)
-            if isinstance(tier_value, str) and tier_value.strip().lower() in {
-                "premium",
-                "premium_domain",
-                "premiumdomain",
-            }:
-                return True
-        return False
-
-    def _is_truthy_flag(value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.strip().lower() in {
-                "true",
-                "1",
-                "yes",
-                "y",
-                "premium",
-                "is_premium",
-                "premium_domain",
-                "premiumdomain",
-            }
-        if isinstance(value, (int, float)):
-            return float(value) == 1.0
         return False
 
     if _has_explicit_premium_marker(item):
@@ -531,35 +535,7 @@ def extract_spaceship_price(payload: Any, domain_name: str, is_premium: bool) ->
         return None
 
     if is_premium:
-        def _is_truthy_flag(value: Any) -> bool:
-            if isinstance(value, bool):
-                return value
-            if isinstance(value, str):
-                return value.strip().lower() in {"true", "1", "yes", "y", "premium"}
-            if isinstance(value, (int, float)):
-                return float(value) == 1.0
-            return False
-
-        explicit_premium_marker = any(
-            _is_truthy_flag(_read_dict_path(item, path))
-            for path in (
-                ("isPremium",),
-                ("is_premium",),
-                ("premiumDomain",),
-                ("isPremiumDomain",),
-                ("pricing", "isPremium"),
-                ("pricing", "premium", "isPremium"),
-            )
-        ) or any(
-            isinstance(tier_value, str) and tier_value.strip().lower() in {"premium", "premium_domain", "premiumdomain"}
-            for tier_value in (
-                _read_dict_path(item, ("tier",)),
-                _read_dict_path(item, ("priceType",)),
-                _read_dict_path(item, ("pricing", "tier")),
-                _read_dict_path(item, ("pricing", "priceType")),
-                _read_dict_path(item, ("pricing", "premium", "tier")),
-            )
-        )
+        explicit_premium_marker = _has_explicit_premium_marker(item)
         for path in PREMIUM_PRICE_PATHS:
             if (path in PREMIUM_GENERIC_FALLBACK_PRICE_PATHS) and (not explicit_premium_marker):
                 continue
@@ -1153,7 +1129,7 @@ def format_verification_failed_alert(
     clean_link = html.escape(str(buy_link or "").strip(), quote=True)
     premium_badge = " 💎 <b>[PREMIUM]</b>" if is_premium else ""
     price_text = (
-        "⚠️ Premium Verified, Price Extraction Failed (Check Manually!)"
+        f"⚠️ {PREMIUM_PRICE_VERIFICATION_FAILED_TEXT}"
         if is_premium
         else f"⚠️ {PRICE_VERIFICATION_FAILED_TEXT}"
     )
