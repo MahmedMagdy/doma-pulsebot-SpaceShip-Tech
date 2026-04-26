@@ -1,18 +1,14 @@
 import logging
 import asyncio
 import os
-from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-ENV_PATH = Path(__file__).resolve().with_name(".env")
-if ENV_PATH.exists():
-    load_dotenv(dotenv_path=ENV_PATH)
-else:
-    load_dotenv()
+load_dotenv(find_dotenv())
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+PROXY_URL = os.getenv("PROXY_URL")
 
 from doma_events import MAIN_CHAT_ID, TELEGRAM_TOPIC_ID, fetch_spaceship_domains, watch_events
 
@@ -90,7 +86,19 @@ def main() -> None:
     if not TELEGRAM_TOKEN:
         raise ValueError("TELEGRAM_TOKEN not set in .env")
 
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    builder = (
+        ApplicationBuilder()
+        .token(TELEGRAM_TOKEN)
+        .read_timeout(60)
+        .connect_timeout(60)
+        .pool_timeout(60)
+        .get_updates_read_timeout(60)
+        .get_updates_connect_timeout(60)
+        .get_updates_pool_timeout(60)
+    )
+    if PROXY_URL:
+        builder = builder.proxy_url(PROXY_URL).get_updates_proxy_url(PROXY_URL)
+    app = builder.build()
     watcher_task: asyncio.Task | None = None
 
     app.add_handler(CommandHandler("start", start))
