@@ -46,21 +46,38 @@ PREMIUM_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
     ("premiumPrice",),
     ("premiumPrice", "amount"),
     ("premiumPrice", "value"),
+    ("premiumPrice", "amount", "value"),
     ("premiumPrice", "register"),
     ("premiumPrice", "registerPrice"),
+    ("premiumPrice", "registerPrice", "amount"),
+    ("premiumPrice", "registerPrice", "value"),
     ("premium",),
     ("premium", "price"),
     ("premium", "amount"),
     ("premium", "value"),
     ("premium", "register"),
     ("premium", "registerPrice"),
+    ("premium", "registerPrice", "amount"),
+    ("premium", "registerPrice", "value"),
     ("premium", "registration"),
     ("premium", "registrationPrice"),
+    ("premium", "registrationPrice", "amount"),
+    ("premium", "registrationPrice", "value"),
     ("pricing", "premium", "register"),
+    ("pricing", "premium", "register", "amount"),
+    ("pricing", "premium", "register", "value"),
     ("pricing", "premium", "registerPrice"),
+    ("pricing", "premium", "registerPrice", "amount"),
+    ("pricing", "premium", "registerPrice", "value"),
     ("pricing", "premium", "registration"),
+    ("pricing", "premium", "registration", "amount"),
+    ("pricing", "premium", "registration", "value"),
     ("pricing", "premium", "registrationPrice"),
+    ("pricing", "premium", "registrationPrice", "amount"),
+    ("pricing", "premium", "registrationPrice", "value"),
     ("pricing", "premium", "price"),
+    ("pricing", "premium", "price", "amount"),
+    ("pricing", "premium", "price", "value"),
     ("pricing", "premium", "amount"),
     ("pricing", "premium", "value"),
     ("pricing", "premium", "amount", "value"),
@@ -69,8 +86,12 @@ PREMIUM_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
     ("pricing", "premiumPrice", "value"),
     ("pricing", "premiumPrice", "register"),
     ("pricing", "premiumPrice", "registerPrice"),
+    ("pricing", "premiumPrice", "registerPrice", "amount"),
+    ("pricing", "premiumPrice", "registerPrice", "value"),
     ("pricing", "registerPremium"),
     ("pricing", "registerPremiumPrice"),
+    ("pricing", "registerPremiumPrice", "amount"),
+    ("pricing", "registerPremiumPrice", "value"),
     ("pricing", "price", "premium"),
     ("pricing", "price", "premium", "amount"),
     ("pricing", "price", "premium", "value"),
@@ -140,13 +161,27 @@ PREMIUM_FLAG_STRING_VALUES = frozenset(
 PREMIUM_TIER_STRING_VALUES = frozenset({"premium", "premium_domain", "premiumdomain"})
 STANDARD_PRICE_PATHS: tuple[tuple[str, ...], ...] = (
     ("pricing", "standard", "register"),
+    ("pricing", "standard", "register", "amount"),
+    ("pricing", "standard", "register", "value"),
     ("pricing", "standard", "registerPrice"),
+    ("pricing", "standard", "registerPrice", "amount"),
+    ("pricing", "standard", "registerPrice", "value"),
     ("pricing", "standard", "price"),
+    ("pricing", "standard", "price", "amount"),
+    ("pricing", "standard", "price", "value"),
     ("pricing", "standard", "amount"),
     ("pricing", "register"),
+    ("pricing", "register", "amount"),
+    ("pricing", "register", "value"),
     ("pricing", "registerPrice"),
+    ("pricing", "registerPrice", "amount"),
+    ("pricing", "registerPrice", "value"),
     ("price",),
+    ("price", "amount"),
+    ("price", "value"),
     ("registerPrice",),
+    ("registerPrice", "amount"),
+    ("registerPrice", "value"),
 )
 
 # Spaceship-specific throttle / batch controls
@@ -518,27 +553,149 @@ def _extract_price_from_paths(item: dict[str, Any], paths: tuple[tuple[str, ...]
     return None
 
 
+PRICE_FALLBACK_KEYWORD_SCORES: dict[str, int] = {
+    "price": 6,
+    "cost": 5,
+    "amount": 4,
+    "value": 3,
+    "register": 3,
+    "registration": 3,
+    "fee": 2,
+    "total": 2,
+    "usd": 2,
+    "dollar": 2,
+    "list": 1,
+    "asking": 1,
+    "ask": 1,
+}
+PRICE_FALLBACK_NEGATIVE_KEYWORDS = frozenset(
+    {
+        "year",
+        "years",
+        "month",
+        "months",
+        "day",
+        "days",
+        "period",
+        "duration",
+        "length",
+        "count",
+        "qty",
+        "quantity",
+        "min",
+        "max",
+        "limit",
+        "score",
+        "rating",
+        "rank",
+        "age",
+        "ttl",
+        "id",
+        "code",
+        "status",
+        "tier",
+        "class",
+        "type",
+        "renew",
+        "renewal",
+    }
+)
+
+
+def _score_price_path(path: tuple[str, ...], is_premium: bool) -> int:
+    score = 0
+    for segment in path:
+        token = str(segment).lower()
+        if "pricing" in token:
+            score += 2
+        if "premium" in token:
+            score += 3 if is_premium else -1
+        for keyword, weight in PRICE_FALLBACK_KEYWORD_SCORES.items():
+            if keyword in token:
+                score += weight
+        for keyword in PRICE_FALLBACK_NEGATIVE_KEYWORDS:
+            if keyword in token:
+                score -= 3
+    return score
+
+
+def _collect_price_candidates(
+    node: Any,
+    *,
+    path: tuple[str, ...],
+    is_premium: bool,
+    candidates: list[tuple[int, int, float]],
+) -> None:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            _collect_price_candidates(
+                value,
+                path=path + (str(key),),
+                is_premium=is_premium,
+                candidates=candidates,
+            )
+        return
+    if isinstance(node, list):
+        for index, value in enumerate(node):
+            _collect_price_candidates(
+                value,
+                path=path + (str(index),),
+                is_premium=is_premium,
+                candidates=candidates,
+            )
+        return
+    if isinstance(node, bool):
+        return
+    parsed = _coerce_non_negative_price(node)
+    if parsed is None:
+        return
+    score = _score_price_path(path, is_premium)
+    candidates.append((score, len(path), parsed))
+
+
+def _fallback_price_from_payload(payload: Any, is_premium: bool) -> Optional[float]:
+    candidates: list[tuple[int, int, float]] = []
+    _collect_price_candidates(payload, path=(), is_premium=is_premium, candidates=candidates)
+    if not candidates:
+        return None
+    _, _, value = max(candidates, key=lambda item: (item[0], -item[1], item[2]))
+    return value
+
+
 # REPLACE HERE: Deterministic multi-layer Spaceship price extractor
 def extract_spaceship_price(payload: Any, domain_name: str, is_premium: bool) -> Optional[float]:
     """
     Deterministic extractor:
     1) match exact domain object,
     2) read only status-specific price paths,
-    3) cast to float or return None.
+    3) fallback to recursive price scan,
+    4) cast to float or return None only if no numeric data exists.
     """
     item = _find_domain_object_for_query(payload, domain_name)
-    if item is None:
+
+    if item is not None:
+        if is_premium:
+            explicit_premium_marker = _has_explicit_premium_marker(item)
+            premium_price = _extract_price_from_paths(item, PREMIUM_PRICE_PATHS)
+            if premium_price is not None:
+                return premium_price
+            if explicit_premium_marker:
+                fallback = _extract_price_from_paths(item, PREMIUM_GENERIC_FALLBACK_PRICE_PATHS)
+                if fallback is not None:
+                    return fallback
+        else:
+            standard_price = _extract_price_from_paths(item, STANDARD_PRICE_PATHS)
+            if standard_price is not None:
+                return standard_price
+
+    search_target = item if item is not None else payload
+    if search_target is None:
         return None
 
-    if is_premium:
-        explicit_premium_marker = _has_explicit_premium_marker(item)
-        premium_price = _extract_price_from_paths(item, PREMIUM_PRICE_PATHS)
-        if premium_price is not None:
-            return premium_price
-        if explicit_premium_marker:
-            return _extract_price_from_paths(item, PREMIUM_GENERIC_FALLBACK_PRICE_PATHS)
+    if isinstance(search_target, list) and not search_target:
         return None
-    return _extract_price_from_paths(item, STANDARD_PRICE_PATHS)
+
+    return _fallback_price_from_payload(search_target, is_premium)
 
 
 class SpaceshipClient:
