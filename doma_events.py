@@ -388,6 +388,13 @@ class AlertStore:
         )
         self.conn.commit()
 
+    def alerted_domains(self, chat_id: int) -> set[str]:
+        rows = self.conn.execute(
+            "SELECT domain FROM sent_alerts WHERE chat_id = ?",
+            (chat_id,),
+        ).fetchall()
+        return {str(row[0] or "").strip().lower() for row in rows if row and row[0]}
+
     def close(self) -> None:
         self.conn.close()
 
@@ -1172,6 +1179,58 @@ def log_to_processed_csv(base_keyword: str, full_domain: str, status: str) -> No
             )
 
 
+def load_processed_available_domains() -> set[str]:
+    """
+    Load domains previously marked as Available from processed_domains.csv.
+    """
+    output_path = Path(__file__).with_name("processed_domains.csv")
+    available_domains: set[str] = set()
+    if not output_path.exists():
+        return available_domains
+
+    def _normalize_header(name: Any) -> str:
+        return re.sub(r"[^a-z0-9]", "", str(name or "").strip().lower())
+
+    with PROCESSED_CSV_LOCK:
+        try:
+            with output_path.open("r", encoding="utf-8", newline="") as handle:
+                rows = list(csv.reader(handle))
+        except OSError as exc:
+            LOGGER.warning("Unable to read processed domains CSV %s: %s", output_path, exc)
+            return available_domains
+
+    if not rows:
+        return available_domains
+
+    header = rows[0]
+    normalized_index_map = {_normalize_header(name): idx for idx, name in enumerate(header)}
+    domain_idx = normalized_index_map.get("fulldomain")
+    if domain_idx is None:
+        domain_idx = normalized_index_map.get("domain")
+    if domain_idx is None:
+        domain_idx = normalized_index_map.get("domainname")
+    status_idx = normalized_index_map.get("status")
+    has_header = domain_idx is not None and status_idx is not None
+
+    if not has_header:
+        domain_idx = 1
+        status_idx = 2
+
+    start_index = 1 if has_header else 0
+    for row in rows[start_index:]:
+        if not row or len(row) <= max(domain_idx, status_idx):
+            continue
+        raw_domain = row[domain_idx]
+        status_text = str(row[status_idx] or "").strip().lower()
+        if status_text != PROCESSED_STATUS_AVAILABLE.lower():
+            continue
+        sanitized_domain = _sanitize_strict_tech_domain(raw_domain)
+        if sanitized_domain:
+            available_domains.add(sanitized_domain)
+
+    return available_domains
+
+
 def _base_keyword_from_domain(full_domain: str) -> str:
     clean_domain = str(full_domain or "").strip().lower()
     if clean_domain.endswith(".tech"):
@@ -1564,6 +1623,25 @@ async def fetch_spaceship_domains(app: Application) -> dict[str, int]:
                 app.bot_data["scan_cycle_counter"] = int(app.bot_data.get("scan_cycle_counter", 0)) + 1
                 app.bot_data["latest_scan_summary"] = summary
                 return summary
+
+            previously_available = load_processed_available_domains()
+            already_alerted = store.alerted_domains(MAIN_CHAT_ID)
+            skip_domains = previously_available.union(already_alerted)
+            if skip_domains:
+                candidate_domains = [domain for domain in candidate_domains if domain not in skip_domains]
+                if not candidate_domains:
+                    summary = {
+                        "domains_checked": 0,
+                        "vip_matches": 0,
+                        "general_finds": 0,
+                        "opportunities": 0,
+                        "api_blocked_failed": 0,
+                        "quota_wait_seconds": 0,
+                        "breaker_wait_seconds": 0,
+                    }
+                    app.bot_data["scan_cycle_counter"] = int(app.bot_data.get("scan_cycle_counter", 0)) + 1
+                    app.bot_data["latest_scan_summary"] = summary
+                    return summary
 
             limit = min(cfg.max_domains_per_cycle, len(candidate_domains))
             domain_cursor = int(app.bot_data.get("domain_cursor", 0))
