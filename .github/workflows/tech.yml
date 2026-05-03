@@ -13,7 +13,7 @@ concurrency:
 jobs:
   sniper-mission:
     runs-on: ubuntu-latest
-    timeout-minutes: 115 # ⏱️ 2. حماية الرصيد: إيقاف السيرفر إجبارياً قبل ما يكمل ساعتين عشان ميسحبش الحصة المجانية
+    timeout-minutes: 180 # ⏱️ 2. حماية الرصيد: إيقاف السيرفر إجبارياً قبل ما يكمل ساعتين عشان ميسحبش الحصة المجانية
     permissions:
       contents: write
 
@@ -56,6 +56,7 @@ jobs:
 
     - name: 6. 💾 Auto-Commit & Push (Bulletproof Sync)
       # 🧠 4. الرفع الذكي: يتأكد إن في تغيير حصل فعلاً، ويعمل دمج آمن عشان المشروع ميبصش
+      if: always()
       run: |
         git config --global user.name "Sniper-AI-Architect"
         git config --global user.email "architect@sniper.local"
