@@ -1204,9 +1204,11 @@ def load_processed_available_domains() -> set[str]:
 
     header = rows[0]
     normalized_index_map = {_normalize_header(name): idx for idx, name in enumerate(header)}
-    domain_idx = normalized_index_map.get("fulldomain") or normalized_index_map.get("domain") or normalized_index_map.get(
-        "domainname"
-    )
+    domain_idx = normalized_index_map.get("fulldomain")
+    if domain_idx is None:
+        domain_idx = normalized_index_map.get("domain")
+    if domain_idx is None:
+        domain_idx = normalized_index_map.get("domainname")
     status_idx = normalized_index_map.get("status")
     has_header = domain_idx is not None and status_idx is not None
 
